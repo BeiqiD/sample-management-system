@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import type { CreateRecordInput, CreateRunStepInput, CreateSampleInput, SampleStatus, StepStatus, UpdateRunStepInput, UpdateSampleInput } from "../shared/types";
+import type { ConfirmRunStepsInput, CreateRecordInput, CreateRunStepCommentsInput, CreateRunStepInput, CreateSampleInput, RunStepTarget, SampleStatus, StepStatus, UpdateRunStepInput, UpdateSampleInput } from "../shared/types";
 import { sampleDetail, sampleEvent, sampleSummary } from "./serializers";
 import { templateStepsFromContent } from "./template-steps";
 import { collectExportAssetKeys } from "./export-data";
@@ -20,6 +20,22 @@ async function digestSha256(buffer: ArrayBuffer) {
 
 function safeObjectName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function validRunStepTargets(value: unknown): value is RunStepTarget[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 12) return false;
+  const keys = new Set<string>();
+  for (const target of value) {
+    if (!target || typeof target !== "object") return false;
+    const candidate = target as Partial<RunStepTarget>;
+    if (typeof candidate.sampleId !== "string" || typeof candidate.runId !== "string"
+      || typeof candidate.stepId !== "string" || typeof candidate.expectedUpdatedAt !== "string"
+      || !candidate.sampleId || !candidate.runId || !candidate.stepId || !candidate.expectedUpdatedAt) return false;
+    const key = `${candidate.sampleId}\u0000${candidate.runId}\u0000${candidate.stepId}`;
+    if (keys.has(key)) return false;
+    keys.add(key);
+  }
+  return true;
 }
 
 async function deleteR2KeysInBatches(bucket: R2Bucket, keys: string[]) {
@@ -111,7 +127,7 @@ app.post("/samples", async (c) => {
 
 app.get("/samples/:id", async (c) => {
   const id = c.req.param("id");
-  const [sample, children, events, runRows, runAssetRows] = await Promise.all([
+  const [sample, children, events, runRows, runAssetRows, runCommentRows] = await Promise.all([
     c.env.DB.prepare(
       `SELECT s.*, p.id AS p_id, p.code AS p_code, p.title AS p_title
        FROM samples s LEFT JOIN samples p ON p.id = s.parent_id WHERE s.id = ?`,
@@ -124,7 +140,7 @@ app.get("/samples/:id", async (c) => {
               r.template_name_snapshot AS template_name,
               r.template_type_snapshot AS template_type,
               r.template_version_snapshot AS template_version,
-              rs.id AS step_id, rs.position, rs.title AS step_title,
+              rs.id AS step_id, rs.template_step_id, rs.position, rs.title AS step_title,
               rs.status AS step_status, rs.notes, rs.updated_at AS step_updated_at,
               rs.origin, rs.tool_name, rs.parameters_text, rs.comments_text, rs.deviation_note,
               rs.planned_title, rs.planned_tool_name, rs.planned_parameters_text,
@@ -143,6 +159,18 @@ app.get("/samples/:id", async (c) => {
        WHERE r.sample_id = ?
        ORDER BY rsa.run_step_id, rsa.role, rsa.position, rsa.created_at`,
     ).bind(id).all<{ run_step_id: string; role: "planned" | "execution"; r2_key: string }>(),
+    c.env.DB.prepare(
+      `SELECT rsc.id, rsc.run_step_id, rsc.scope, rsc.operation_group_id,
+              rsc.body, rsc.actor_email, rsc.created_at
+       FROM run_step_comments rsc
+       JOIN run_steps rs ON rs.id = rsc.run_step_id
+       JOIN runs r ON r.id = rs.run_id
+       WHERE r.sample_id = ?
+       ORDER BY rsc.created_at, rsc.id`,
+    ).bind(id).all<{
+      id: string; run_step_id: string; scope: "common" | "individual";
+      operation_group_id: string | null; body: string; actor_email: string | null; created_at: string;
+    }>(),
   ]);
   if (!sample) throw new HTTPException(404, { message: "Sample not found" });
   const parent = sample.p_id
@@ -154,10 +182,26 @@ app.get("/samples/:id", async (c) => {
     createdAt: string; completedAt: string | null; steps: unknown[];
   }>();
   const stepAssets = new Map<string, { planned: string[]; execution: string[] }>();
+  const stepComments = new Map<string, Array<{
+    id: string; scope: "common" | "individual"; operationGroupId: string | null;
+    body: string; actorEmail: string | null; createdAt: string;
+  }>>();
   for (const row of runAssetRows.results) {
     const entry = stepAssets.get(row.run_step_id) ?? { planned: [], execution: [] };
     entry[row.role].push(row.r2_key);
     stepAssets.set(row.run_step_id, entry);
+  }
+  for (const row of runCommentRows.results) {
+    const entry = stepComments.get(row.run_step_id) ?? [];
+    entry.push({
+      id: row.id,
+      scope: row.scope,
+      operationGroupId: row.operation_group_id,
+      body: row.body,
+      actorEmail: row.actor_email,
+      createdAt: row.created_at,
+    });
+    stepComments.set(row.run_step_id, entry);
   }
   for (const row of runRows.results) {
     const runId = String(row.run_id);
@@ -176,7 +220,8 @@ app.get("/samples/:id", async (c) => {
       const stepId = String(row.step_id);
       const images = stepAssets.get(stepId) ?? { planned: [], execution: [] };
       runs.get(runId)!.steps.push({
-      id: stepId, position: Number(row.position), origin: String(row.origin), title: String(row.step_title),
+      id: stepId, templateStepId: row.template_step_id ? String(row.template_step_id) : null,
+      position: Number(row.position), origin: String(row.origin), title: String(row.step_title),
       status: String(row.step_status), notes: row.notes ? String(row.notes) : null,
       toolName: row.tool_name ? String(row.tool_name) : null,
       parametersText: row.parameters_text ? String(row.parameters_text) : null,
@@ -188,6 +233,7 @@ app.get("/samples/:id", async (c) => {
       plannedCommentsText: row.planned_comments_text ? String(row.planned_comments_text) : null,
       plannedImageKeys: images.planned,
       executionImageKeys: images.execution,
+      comments: stepComments.get(stepId) ?? [],
       createdAt: String(row.step_created_at),
       updatedAt: String(row.step_updated_at),
     });
@@ -468,81 +514,120 @@ app.post("/samples/:sampleId/runs/:runId/steps", async (c) => {
   return c.json({ id: stepId }, 201);
 });
 
-app.post("/samples/:sampleId/runs/:runId/promote", async (c) => {
-  const { sampleId, runId } = c.req.param();
-  const [run, stepRows, assetRows] = await Promise.all([
-    c.env.DB.prepare(
-      `SELECT r.template_name_snapshot AS name, r.template_type_snapshot AS template_type,
-              r.template_version_snapshot AS source_version, s.code AS sample_code
-       FROM runs r JOIN samples s ON s.id = r.sample_id
-       WHERE r.id = ? AND r.sample_id = ? AND r.status != 'cancelled'`,
-    ).bind(runId, sampleId).first<{ name: string; template_type: "process" | "module" | "recipe"; source_version: number; sample_code: string }>(),
-    c.env.DB.prepare(
-      `SELECT id, origin, title, tool_name, parameters_text, comments_text, deviation_note, position
-       FROM run_steps WHERE run_id = ? ORDER BY position`,
-    ).bind(runId).all<{ id: string; origin: "template" | "ad_hoc"; title: string; tool_name: string | null; parameters_text: string | null; comments_text: string | null; deviation_note: string | null; position: number }>(),
-    c.env.DB.prepare(
-      `SELECT rsa.run_step_id, rsa.asset_id
-       FROM run_step_assets rsa
-       JOIN assets a ON a.id = rsa.asset_id AND a.status = 'ready'
-       JOIN run_steps rs ON rs.id = rsa.run_step_id
-       WHERE rs.run_id = ?
-       ORDER BY rs.position, rsa.role, rsa.position, rsa.created_at`,
-    ).bind(runId).all<{ run_step_id: string; asset_id: string }>(),
-  ]);
-  if (!run) throw new HTTPException(404, { message: "Sample run not found" });
-  if (!run.name || !["process", "module", "recipe"].includes(run.template_type)) throw new HTTPException(422, { message: "This older run does not contain a usable template snapshot" });
-  if (!stepRows.results.length) throw new HTTPException(422, { message: "A run without steps cannot become a template" });
+app.post("/run-step-comments", async (c) => {
+  const input = await c.req.json<CreateRunStepCommentsInput>();
+  if (!input || !["common", "individual"].includes(input.scope)
+    || typeof input.body !== "string" || !validRunStepTargets(input.targets)) {
+    throw new HTTPException(400, { message: "A valid comment and 1–12 step targets are required" });
+  }
+  const body = input.body.trim();
+  if (!body) throw new HTTPException(400, { message: "Comment cannot be empty" });
+  if (body.length > 10_000) throw new HTTPException(400, { message: "Comment is too long" });
+  if (input.scope === "individual" && input.targets.length !== 1) {
+    throw new HTTPException(400, { message: "An individual comment must target one sample step" });
+  }
 
-  const latest = await c.env.DB.prepare(
-    "SELECT COALESCE(MAX(version), 0) AS version FROM template_versions WHERE name = ? AND template_type = ?",
-  ).bind(run.name, run.template_type).first<{ version: number }>();
-  const id = crypto.randomUUID();
-  const version = Number(latest?.version ?? 0) + 1;
+  const values = input.targets.map(() => "(?, ?, ?)").join(", ");
+  const bindings = input.targets.flatMap((target) => [target.sampleId, target.runId, target.stepId]);
+  const matched = await c.env.DB.prepare(
+    `WITH requested(sample_id, run_id, step_id) AS (VALUES ${values})
+     SELECT q.sample_id, q.run_id, q.step_id
+     FROM requested q
+     JOIN runs r ON r.id = q.run_id AND r.sample_id = q.sample_id
+     JOIN run_steps rs ON rs.id = q.step_id AND rs.run_id = q.run_id`,
+  ).bind(...bindings).all<{ sample_id: string; run_id: string; step_id: string }>();
+  if (matched.results.length !== input.targets.length) {
+    throw new HTTPException(404, { message: "One or more sample steps were not found" });
+  }
+
+  const operationGroupId = crypto.randomUUID();
   const now = new Date().toISOString();
   const userEmail = c.get("userEmail");
-  const stepIds = new Map(stepRows.results.map((step) => [step.id, crypto.randomUUID()]));
-  const uniqueAssets = new Map<string, { stepId: string; assetId: string }>();
-  for (const asset of assetRows.results) {
-    const stepId = stepIds.get(asset.run_step_id);
-    if (stepId) uniqueAssets.set(`${stepId}:${asset.asset_id}`, { stepId, assetId: asset.asset_id });
-  }
-  const provenance = {
-    schemaVersion: 1,
-    source: "sample_run",
-    sampleId,
-    sampleCode: run.sample_code,
-    runId,
-    assignedTemplateVersion: run.source_version,
-    promotedAt: now,
-  };
-  const statements: D1PreparedStatement[] = [
-    c.env.DB.prepare(
-      `INSERT INTO template_versions
-        (id, name, template_type, version, content_json, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(id, run.name, run.template_type, version, JSON.stringify(provenance), userEmail, now),
-    ...bulkInsertStatements(c.env.DB, "template_steps",
-      ["id", "template_version_id", "position", "name", "tool_name", "parameters_text", "comments_text", "raw_json"],
-      stepRows.results.map((step, index) => [
-        stepIds.get(step.id), id, index, step.title, step.tool_name, step.parameters_text, step.comments_text,
-        JSON.stringify({ source: "sample_run", runStepId: step.id, origin: step.origin, deviationNote: step.deviation_note }),
-      ])),
-    ...bulkInsertStatements(c.env.DB, "template_step_assets", ["template_step_id", "asset_id"],
-      [...uniqueAssets.values()].map((asset) => [asset.stepId, asset.assetId])),
-    c.env.DB.prepare(
+  const sampleIds = [...new Set(input.targets.map((target) => target.sampleId))];
+  const statements: D1PreparedStatement[] = input.targets.map((target) => c.env.DB.prepare(
+    `INSERT INTO run_step_comments
+       (id, run_step_id, scope, operation_group_id, body, actor_email, created_at)
+     SELECT ?, rs.id, ?, ?, ?, ?, ?
+     FROM run_steps rs JOIN runs r ON r.id = rs.run_id
+     WHERE rs.id = ? AND r.id = ? AND r.sample_id = ?`,
+  ).bind(
+    crypto.randomUUID(), input.scope, operationGroupId, body, userEmail, now,
+    target.stepId, target.runId, target.sampleId,
+  ));
+  for (const sampleId of sampleIds) {
+    const stepIds = input.targets.filter((target) => target.sampleId === sampleId).map((target) => target.stepId);
+    statements.push(c.env.DB.prepare(
       `INSERT INTO events (id, sample_id, kind, body, metadata_json, actor_email, created_at)
        VALUES (?, ?, 'step', ?, ?, ?, ?)`,
-    ).bind(crypto.randomUUID(), sampleId, `Saved actual run as ${run.name} v${version}`, JSON.stringify({ runId, templateVersionId: id, action: "promoted" }), userEmail, now),
-    c.env.DB.prepare("UPDATE samples SET updated_by = ?, updated_at = ? WHERE id = ?").bind(userEmail, now, sampleId),
-  ];
-  if (statements.length > 49) throw new HTTPException(413, { message: "This run is too large to convert on the current plan" });
-  try { await c.env.DB.batch(statements); }
-  catch (error) {
-    if (String(error).includes("UNIQUE")) throw new HTTPException(409, { message: "Another template version was created at the same time. Try again." });
-    throw error;
+    ).bind(
+      crypto.randomUUID(), sampleId,
+      input.scope === "common" ? `Common step comment: ${body}` : `Step comment: ${body}`,
+      JSON.stringify({ action: "step_comment", scope: input.scope, operationGroupId, stepIds }),
+      userEmail, now,
+    ));
+    statements.push(c.env.DB.prepare(
+      "UPDATE samples SET updated_by = ?, updated_at = ? WHERE id = ?",
+    ).bind(userEmail, now, sampleId));
   }
-  return c.json({ id, version }, 201);
+  const results = await c.env.DB.batch(statements);
+  if (results.slice(0, input.targets.length).some((result) => !result.meta.changes)) {
+    throw new HTTPException(409, { message: "One or more sample steps changed before the comment was saved" });
+  }
+  return c.json({ ok: true, operationGroupId }, 201);
+});
+
+app.post("/run-steps/confirm", async (c) => {
+  const input = await c.req.json<ConfirmRunStepsInput>();
+  if (!input || !validRunStepTargets(input.targets)) {
+    throw new HTTPException(400, { message: "Between 1 and 12 step targets are required" });
+  }
+  const operationGroupId = crypto.randomUUID();
+  const expectedTimes = input.targets.map((target) => Date.parse(target.expectedUpdatedAt)).filter(Number.isFinite);
+  const now = new Date(Math.max(Date.now(), ...expectedTimes.map((value) => value + 1))).toISOString();
+  const userEmail = c.get("userEmail");
+  const values = input.targets.map(() => "(?, ?, ?, ?)").join(", ");
+  const bindings = input.targets.flatMap((target) => [target.sampleId, target.runId, target.stepId, target.expectedUpdatedAt]);
+  const statements: D1PreparedStatement[] = [c.env.DB.prepare(
+    `WITH requested(sample_id, run_id, step_id, expected_updated_at) AS (VALUES ${values}),
+     valid AS (
+       SELECT q.step_id
+       FROM requested q
+       JOIN runs r ON r.id = q.run_id AND r.sample_id = q.sample_id
+       JOIN run_steps rs ON rs.id = q.step_id AND rs.run_id = q.run_id
+       WHERE rs.updated_at = q.expected_updated_at AND rs.status IN ('pending', 'in_progress')
+     )
+     UPDATE run_steps
+     SET status = 'done', updated_by = ?, last_mutation_id = ?, updated_at = ?
+     WHERE id IN (SELECT step_id FROM valid)
+       AND (SELECT COUNT(*) FROM valid) = ?`,
+  ).bind(...bindings, userEmail, operationGroupId, now, input.targets.length)];
+
+  const sampleIds = [...new Set(input.targets.map((target) => target.sampleId))];
+  for (const sampleId of sampleIds) {
+    const stepIds = input.targets.filter((target) => target.sampleId === sampleId).map((target) => target.stepId);
+    statements.push(c.env.DB.prepare(
+      `INSERT INTO events (id, sample_id, kind, body, metadata_json, actor_email, created_at)
+       SELECT ?, ?, 'step', ?, ?, ?, ?
+       WHERE EXISTS (
+         SELECT 1 FROM run_steps WHERE last_mutation_id = ? AND id IN (${stepIds.map(() => "?").join(", ")})
+       )`,
+    ).bind(
+      crypto.randomUUID(), sampleId, `Confirmed ${stepIds.length} step${stepIds.length === 1 ? "" : "s"} as done`,
+      JSON.stringify({ action: "confirmed_done", operationGroupId, stepIds }), userEmail, now,
+      operationGroupId, ...stepIds,
+    ));
+    statements.push(c.env.DB.prepare(
+      `UPDATE samples SET updated_by = ?, updated_at = ?
+       WHERE id = ? AND EXISTS (
+         SELECT 1 FROM run_steps WHERE last_mutation_id = ? AND id IN (${stepIds.map(() => "?").join(", ")})
+       )`,
+    ).bind(userEmail, now, sampleId, operationGroupId, ...stepIds));
+  }
+  const results = await c.env.DB.batch(statements);
+  if (results[0].meta.changes !== input.targets.length) {
+    throw new HTTPException(409, { message: "One or more steps changed elsewhere. Reload before confirming." });
+  }
+  return c.json({ ok: true, confirmed: input.targets.length });
 });
 
 app.post("/assets", async (c) => {
@@ -602,6 +687,7 @@ app.get("/exports/all", async (c) => {
     template_step_assets: "SELECT * FROM template_step_assets ORDER BY template_step_id, asset_id",
     runs: "SELECT * FROM runs ORDER BY created_at, id",
     run_steps: "SELECT * FROM run_steps ORDER BY run_id, position",
+    run_step_comments: "SELECT * FROM run_step_comments ORDER BY run_step_id, created_at, id",
     run_step_assets: "SELECT * FROM run_step_assets ORDER BY run_step_id, role, position",
     imports: "SELECT * FROM imports ORDER BY created_at, id",
     assets: "SELECT * FROM assets ORDER BY created_at, id",

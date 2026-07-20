@@ -1,4 +1,4 @@
-import type { CreateRecordInput, CreateRunStepInput, CreateSampleInput, FabubloxImportPreview, FullExportManifest, SampleDetail, SampleSummary, UpdateRunStepInput, UpdateSampleInput } from "../../shared/types";
+import type { ConfirmRunStepsInput, CreateRecordInput, CreateRunStepCommentsInput, CreateRunStepInput, CreateSampleInput, FabubloxImportPreview, FullExportManifest, SampleDetail, SampleSummary, UpdateRunStepInput, UpdateSampleInput } from "../../shared/types";
 import { compressLayerStackImage } from "./images";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -43,8 +43,15 @@ export const api = {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   }),
-  promoteRun: (sampleId: string, runId: string) => request<{ id: string; version: number }>(`/samples/${sampleId}/runs/${runId}/promote`, {
+  addRunStepComments: (input: CreateRunStepCommentsInput) => request<{ ok: true; operationGroupId: string }>("/run-step-comments", {
     method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  }),
+  confirmRunSteps: (input: ConfirmRunStepsInput) => request<{ ok: true; confirmed: number }>("/run-steps/confirm", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
   }),
   uploadAsset: async (file: Blob, filename: string) => request<{ id: string; key: string; deduplicated: boolean }>("/assets", {
     method: "POST",

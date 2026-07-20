@@ -1,0 +1,93 @@
+import { describe, expect, it } from "vitest";
+import type { RunStep, SampleDetail, SampleRun } from "../../shared/types";
+import { buildRunGrid } from "./runGrid";
+
+function step(id: string, position: number, overrides: Partial<RunStep> = {}): RunStep {
+  return {
+    id,
+    templateStepId: id,
+    position,
+    origin: "template",
+    title: id,
+    status: "pending",
+    notes: null,
+    toolName: null,
+    parametersText: null,
+    commentsText: null,
+    deviationNote: null,
+    plannedTitle: id,
+    plannedToolName: null,
+    plannedParametersText: null,
+    plannedCommentsText: null,
+    plannedImageKeys: [],
+    executionImageKeys: [],
+    comments: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function run(id: string, steps: RunStep[]): SampleRun {
+  return {
+    id,
+    templateVersionId: "recipe-v1",
+    templateName: "Recipe",
+    templateType: "recipe",
+    templateVersion: 1,
+    status: "active",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    completedAt: null,
+    steps,
+  };
+}
+
+function sample(id: string): SampleDetail {
+  return {
+    id,
+    code: id.toUpperCase(),
+    title: id,
+    status: "active",
+    location: null,
+    parentId: null,
+    pinned: false,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    description: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    parent: null,
+    children: [],
+    events: [],
+    runs: [],
+  };
+}
+
+describe("multi-sample run grid", () => {
+  it("aligns template rows by template step id despite different positions", () => {
+    const rows = buildRunGrid([
+      { sample: sample("a"), run: run("a-run", [step("one", 1000), step("two", 2000)]) },
+      { sample: sample("b"), run: run("b-run", [step("one", 500), step("two", 9000)]) },
+    ]);
+    expect(rows.map((row) => row.steps.map((item) => item?.id))).toEqual([
+      ["one", "one"],
+      ["two", "two"],
+    ]);
+  });
+
+  it("places an individual ad hoc step in a sparse row after its recipe anchor", () => {
+    const extra = step("extra", 1500, { origin: "ad_hoc", templateStepId: null });
+    const rows = buildRunGrid([
+      { sample: sample("a"), run: run("a-run", [step("one", 1000), step("two", 2000)]) },
+      { sample: sample("b"), run: run("b-run", [step("one", 1000), extra, step("two", 2000)]) },
+    ]);
+    expect(rows.map((row) => row.kind)).toEqual(["template", "ad_hoc", "template"]);
+    expect(rows[1].steps).toEqual([null, extra]);
+  });
+
+  it("keeps a column present when a sample has no matching run", () => {
+    const rows = buildRunGrid([
+      { sample: sample("a"), run: run("a-run", [step("one", 1000)]) },
+      { sample: sample("b"), run: null },
+    ]);
+    expect(rows[0].steps).toEqual([expect.objectContaining({ id: "one" }), null]);
+  });
+});
