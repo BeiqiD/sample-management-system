@@ -35,6 +35,7 @@ export interface SampleDetail extends SampleSummary {
 
 export interface RunStep {
   id: string;
+  templateStepId: string | null;
   position: number;
   origin: "template" | "ad_hoc";
   title: string;
@@ -50,8 +51,35 @@ export interface RunStep {
   plannedCommentsText: string | null;
   plannedImageKeys: string[];
   executionImageKeys: string[];
+  comments: RunStepComment[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface RunStepComment {
+  id: string;
+  scope: "common" | "individual";
+  operationGroupId: string | null;
+  body: string;
+  actorEmail: string | null;
+  createdAt: string;
+}
+
+export interface RunStepTarget {
+  sampleId: string;
+  runId: string;
+  stepId: string;
+  expectedUpdatedAt: string;
+}
+
+export interface CreateRunStepCommentsInput {
+  scope: RunStepComment["scope"];
+  body: string;
+  targets: RunStepTarget[];
+}
+
+export interface ConfirmRunStepsInput {
+  targets: RunStepTarget[];
 }
 
 export interface UpdateRunStepInput {

@@ -108,7 +108,7 @@ export function EntryPage() {
 
   return <div className="page entry-page">
     <div className="page-heading">
-      <div><p className="eyebrow">Bench entry</p><h1>Record information</h1><p className="lead">Choose the sample first, then record observations and current state in one place.</p></div>
+      <div><p className="eyebrow">Bench entry</p><h1>Sample record</h1><p className="lead">Choose the sample first, then record sample-level observations and current state in one place.</p></div>
       <Link className="button" to="/samples/new">New sample</Link>
     </div>
     <div className="entry-layout">

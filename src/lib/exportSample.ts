@@ -47,6 +47,16 @@ export async function exportSample(sample: SampleDetail) {
       lines.push(`#### ${index + 1}. ${step.title} [${step.status}]`, "", `- Origin: ${step.origin}`, `- Tool: ${step.toolName || ""}`, "", step.parametersText || "");
       if (step.commentsText) lines.push("", step.commentsText);
       if (step.deviationNote) lines.push("", `**Deviation:** ${step.deviationNote}`);
+      const commonComments = step.comments.filter((comment) => comment.scope === "common");
+      const individualComments = step.comments.filter((comment) => comment.scope === "individual");
+      if (commonComments.length) {
+        lines.push("", "**Common execution comments:**");
+        for (const comment of commonComments) lines.push(`- ${comment.body} (${comment.createdAt})`);
+      }
+      if (individualComments.length) {
+        lines.push("", "**Individual execution comments:**");
+        for (const comment of individualComments) lines.push(`- ${comment.body} (${comment.createdAt})`);
+      }
       for (const key of [...step.plannedImageKeys, ...step.executionImageKeys]) lines.push("", `![${step.title}](${assetPaths.get(key)})`);
       lines.push("");
     }

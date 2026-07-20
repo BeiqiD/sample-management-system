@@ -1,16 +1,22 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import type { SampleDetail, SampleStatus } from "../../shared/types";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import type { SampleDetail, SampleStatus, SampleSummary } from "../../shared/types";
+import { FileDropzone } from "../components/FileDropzone";
+import { MultiSampleRunGrid } from "../components/MultiSampleRunGrid";
 import { StatusPill } from "../components/StatusPill";
-import { RunChecklist } from "../components/RunChecklist";
 import { api, type TemplateRecord } from "../lib/api";
 import { exportSample } from "../lib/exportSample";
 import { compressCommentImage } from "../lib/images";
-import { FileDropzone } from "../components/FileDropzone";
+
+const MAX_VISIBLE_SAMPLES = 8;
 
 export function SamplePage() {
   const { sampleId = "" } = useParams();
-  const [sample, setSample] = useState<SampleDetail | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const additionalKey = searchParams.get("with") || "";
+  const additionalIds = additionalKey.split(",").map((id) => id.trim()).filter((id, index, ids) => id && id !== sampleId && ids.indexOf(id) === index).slice(0, MAX_VISIBLE_SAMPLES - 1);
+  const [samples, setSamples] = useState<SampleDetail[]>([]);
+  const sample = samples.find((item) => item.id === sampleId) || null;
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -20,10 +26,47 @@ export function SamplePage() {
   const [editingDetails, setEditingDetails] = useState(false);
   const [updatingDetails, setUpdatingDetails] = useState(false);
   const [commentImage, setCommentImage] = useState<File | null>(null);
+  const [showSamplePicker, setShowSamplePicker] = useState(false);
+  const [sampleQuery, setSampleQuery] = useState("");
+  const [sampleResults, setSampleResults] = useState<SampleSummary[]>([]);
   const pendingUploadRef = useRef<{ signature: string; assetKey?: string; thumbnailKey?: string } | null>(null);
-  const load = useCallback(() => api.getSample(sampleId).then(setSample).catch((error: Error) => setError(error.message)), [sampleId]);
+
+  const load = useCallback(async () => {
+    try {
+      const details = await Promise.all([sampleId, ...additionalIds].map((id) => api.getSample(id)));
+      setSamples(details);
+      setError("");
+    } catch (error) { setError((error as Error).message); }
+  // additionalKey is the stable URL representation of additionalIds.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sampleId, additionalKey]);
+
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { api.listTemplates().then(({ templates }) => setTemplates(templates)).catch((error: Error) => setError(error.message)); }, []);
+  useEffect(() => {
+    if (!showSamplePicker) return;
+    const timeout = window.setTimeout(() => {
+      api.listSamples(sampleQuery).then(({ samples }) => setSampleResults(samples)).catch((error: Error) => setError(error.message));
+    }, 160);
+    return () => window.clearTimeout(timeout);
+  }, [sampleQuery, showSamplePicker]);
+
+  function updateVisibleSamples(ids: string[]) {
+    const next = new URLSearchParams(searchParams);
+    if (ids.length) next.set("with", ids.join(",")); else next.delete("with");
+    setSearchParams(next, { replace: true });
+  }
+
+  function addVisibleSample(id: string) {
+    if (samples.length >= MAX_VISIBLE_SAMPLES || id === sampleId || additionalIds.includes(id)) return;
+    updateVisibleSamples([...additionalIds, id]);
+    setShowSamplePicker(false);
+    setSampleQuery("");
+  }
+
+  function removeVisibleSample(id: string) {
+    updateVisibleSamples(additionalIds.filter((sample) => sample !== id));
+  }
 
   async function assignTemplate() {
     if (!templateVersionId) return;
@@ -93,18 +136,40 @@ export function SamplePage() {
   }
 
   if (!sample) return <div className="page"><p>{error || "Loading sample…"}</p></div>;
+  const includedIds = new Set(samples.map((item) => item.id));
+  const availableResults = sampleResults.filter((result) => !includedIds.has(result.id));
+
   return <div className="page sample-page">
     <Link className="back-link" to="/">← Samples</Link>
     <div className="sample-header">
       <div><p className="eyebrow">{sample.code}</p><h1>{sample.title}</h1><p className="lead">{sample.description || "No description"}</p></div>
-      <div className="header-actions"><StatusPill status={sample.status} /><Link className="button primary" to={`/entry?sampleId=${encodeURIComponent(sample.id)}`}>Record</Link><Link className="button" to={`/samples/new?parentId=${encodeURIComponent(sample.id)}`}>Create child</Link><button className="button" disabled={exporting} onClick={() => {
+      <div className="header-actions"><StatusPill status={sample.status} /><Link className="button primary" to={`/entry?sampleId=${encodeURIComponent(sample.id)}`}>Sample record</Link><Link className="button" to={`/samples/new?parentId=${encodeURIComponent(sample.id)}`}>Create child</Link><button className="button" disabled={exporting} onClick={() => {
         setExporting(true);
         void exportSample(sample).catch((error: Error) => setError(error.message)).finally(() => setExporting(false));
       }}>{exporting ? "Exporting…" : "Export ZIP"}</button></div>
     </div>
-    <div className="detail-grid">
+
+    <section className="execution-workspace">
+      <div className="execution-heading">
+        <div><p className="eyebrow">Execution workspace</p><h2>Samples in this view</h2><p>Use checked columns for common confirmation and comments. Every correction remains sample-specific.</p></div>
+        <button className="button primary" disabled={samples.length >= MAX_VISIBLE_SAMPLES} onClick={() => setShowSamplePicker((value) => !value)}>+ Add sample</button>
+      </div>
+      <div className="visible-samples">
+        {samples.map((item, index) => <div className="visible-sample" key={item.id}><span>{item.code}</span><small>{item.title}</small>{index > 0 && <button type="button" aria-label={`Remove ${item.code} from view`} onClick={() => removeVisibleSample(item.id)}>×</button>}</div>)}
+      </div>
+      {showSamplePicker && <div className="card sample-picker-popover">
+        <label>Find another sample<input autoFocus value={sampleQuery} onChange={(event) => setSampleQuery(event.target.value)} placeholder="Code, title, or location" /></label>
+        <div>{availableResults.length ? availableResults.map((result) => <button type="button" key={result.id} onClick={() => addVisibleSample(result.id)}><strong>{result.code}</strong><span>{result.title}</span><small>{result.location || "No location"}</small></button>) : <p className="muted">No samples to add.</p>}</div>
+      </div>}
+
+      <div className="card assign-template"><div><strong>Assign a template to {sample.code}</strong><small>Creates an independent execution snapshot for this sample.</small></div><select value={templateVersionId} onChange={(event) => setTemplateVersionId(event.target.value)}><option value="">Choose process, module, or recipe…</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name} · {template.templateType} v{template.version} · {template.stepCount} steps</option>)}</select><button className="button" disabled={!templateVersionId || assigning} onClick={() => void assignTemplate()}>{assigning ? "Assigning…" : "Assign"}</button></div>
+
+      {sample.runs.length > 0 ? <section className="runs-section">{sample.runs.map((run) => <MultiSampleRunGrid key={`${run.id}:${samples.map((item) => item.id).join(",")}`} primaryRun={run} columns={samples.map((item) => ({ sample: item, run: item.id === sample.id ? run : item.runs.find((candidate) => candidate.templateVersionId === run.templateVersionId) ?? null }))} onSaved={load} />)}</section> : <div className="card empty-run-message"><h2>No assigned recipe yet</h2><p>Assign one above to start the execution grid.</p></div>}
+    </section>
+
+    <div className="detail-grid sample-record-layout">
       <aside className="card facts">
-        <div className="card-title-row"><h2>Details</h2><button className="text-button" onClick={() => setEditingDetails((value) => !value)}>{editingDetails ? "Cancel" : "Edit"}</button></div>
+        <div className="card-title-row"><h2>Sample details</h2><button className="text-button" onClick={() => setEditingDetails((value) => !value)}>{editingDetails ? "Cancel" : "Edit"}</button></div>
         {editingDetails ? <form className="detail-form" onSubmit={updateDetails}>
           <label>Status<select name="status" defaultValue={sample.status}><option value="active">Active</option><option value="stored">Stored</option><option value="consumed">Consumed</option><option value="lost">Lost</option></select></label>
           <label>Location<input name="location" defaultValue={sample.location || ""} placeholder="Box, lab, or tool" /></label>
@@ -113,12 +178,11 @@ export function SamplePage() {
         </form> : <dl><dt>Status</dt><dd>{sample.status}</dd><dt>Location</dt><dd>{sample.location || "—"}</dd><dt>Pinned</dt><dd>{sample.pinned ? "Yes" : "No"}</dd><dt>Parent</dt><dd>{sample.parent ? <Link to={`/samples/${sample.parent.id}`}>{sample.parent.code}</Link> : "—"}</dd><dt>Children</dt><dd>{sample.children.length ? sample.children.map((child) => <Link key={child.id} to={`/samples/${child.id}`}>{child.code}</Link>) : "—"}</dd><dt>Created</dt><dd>{new Date(sample.createdAt).toLocaleString()}</dd></dl>}
       </aside>
       <section>
-        <div className="card assign-template"><div><strong>Assign a template</strong><small>Creates an independent run-step checklist.</small></div><select value={templateVersionId} onChange={(event) => setTemplateVersionId(event.target.value)}><option value="">Choose process, module, or recipe…</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name} · {template.templateType} v{template.version} · {template.stepCount} steps</option>)}</select><button className="button" disabled={!templateVersionId || assigning} onClick={() => void assignTemplate()}>{assigning ? "Assigning…" : "Assign"}</button></div>
-        {sample.runs.length > 0 && <section className="runs-section"><h2>Runs</h2>{sample.runs.map((run) => <RunChecklist key={run.id} sampleId={sampleId} run={run} onSaved={load} />)}</section>}
+        <div className="section-heading sample-record-heading"><div><p className="eyebrow">Sample-level information</p><h2>Sample record</h2></div></div>
         <form className="card composer" onSubmit={addComment}>
-          <label>Add a record<textarea name="body" rows={3} placeholder="Comment, observation, or step note…" /></label>
-          <FileDropzone compact accept="image/*" capture="environment" file={commentImage} onFile={(file) => { pendingUploadRef.current = null; setCommentImage(file); }} label="Drop a record photo" />
-          <div className="composer-actions"><span className="muted">Photos are compressed before upload.</span><button className="button primary" disabled={saving}>{saving ? "Saving…" : "Add to timeline"}</button></div>
+          <label>Add a sample record<textarea name="body" rows={3} placeholder="Overall observation about this sample, independent of any recipe step…" /></label>
+          <FileDropzone compact accept="image/*" capture="environment" file={commentImage} onFile={(file) => { pendingUploadRef.current = null; setCommentImage(file); }} label="Drop a sample-level photo" />
+          <div className="composer-actions"><span className="muted">This appears in the sample timeline, not inside a recipe step.</span><button className="button primary" disabled={saving}>{saving ? "Saving…" : "Add to sample record"}</button></div>
         </form>
         {error && <p className="error-banner">{error}</p>}
         <div className="timeline">
