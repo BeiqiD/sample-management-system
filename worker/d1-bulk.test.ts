@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { chunkRows } from "./d1-bulk";
+import { bulkInsertStatements, chunkRows } from "./d1-bulk";
+
+function fakeDatabase() {
+  return {
+    prepare: () => ({ bind: () => ({}) }),
+  } as unknown as D1Database;
+}
 
 describe("D1 bulk inserts", () => {
   it("keeps every statement within D1's 100 parameter limit", () => {
@@ -7,5 +13,14 @@ describe("D1 bulk inserts", () => {
     const chunks = chunkRows(rows, 11);
     expect(chunks.map((chunk) => chunk.length)).toEqual([9, 9, 9, 7]);
     expect(chunks.every((chunk) => chunk.length * 11 <= 100)).toBe(true);
+  });
+
+  it("accepts schema identifiers containing digits after the first character", () => {
+    expect(() => bulkInsertStatements(fakeDatabase(), "assets", ["r2_key"], [["imports/example"]])).not.toThrow();
+  });
+
+  it("rejects identifiers that could alter the generated SQL", () => {
+    expect(() => bulkInsertStatements(fakeDatabase(), "assets", ["r2_key) VALUES (?) --"], [["imports/example"]]))
+      .toThrow("Unsafe bulk insert identifier");
   });
 });
