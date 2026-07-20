@@ -1,4 +1,5 @@
-import type { CreateEventInput, CreateSampleInput, SampleDetail, SampleSummary } from "../../shared/types";
+import type { CreateEventInput, CreateSampleInput, FabubloxImportPreview, SampleDetail, SampleSummary, StepStatus } from "../../shared/types";
+import { compressLayerStackImage } from "./images";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, init);
@@ -22,6 +23,16 @@ export const api = {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   }),
+  assignTemplate: (sampleId: string, templateVersionId: string) => request<{ id: string }>(`/samples/${sampleId}/runs`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ templateVersionId }),
+  }),
+  updateRunStep: (sampleId: string, runId: string, stepId: string, status: StepStatus, notes: string) => request<{ ok: true }>(`/samples/${sampleId}/runs/${runId}/steps/${stepId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status, notes }),
+  }),
   uploadAsset: async (file: Blob, filename: string) => request<{ key: string }>("/assets", {
     method: "POST",
     headers: { "content-type": file.type || "application/octet-stream", "x-filename": filename },
@@ -33,6 +44,19 @@ export const api = {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   }),
+  importFabublox: async (file: File, preview: FabubloxImportPreview, templateType: TemplateRecord["templateType"]) => {
+    const form = new FormData();
+    form.append("workbook", file, file.name);
+    const manifest = { ...preview, images: preview.images.map(({ data: _data, ...image }) => image), templateType };
+    form.append("manifest", new Blob([JSON.stringify(manifest)], { type: "application/json" }), "manifest.json");
+    for (const image of preview.images) {
+      const sourceName = image.sourcePart.split("/").pop() || `${image.localId}.png`;
+      const source = new File([new Uint8Array(image.data)], sourceName, { type: image.mimeType });
+      const compressed = await compressLayerStackImage(source);
+      form.append(`image:${image.localId}`, compressed, compressed.name);
+    }
+    return request<{ id: string; templateVersionId: string; version: number }>("/imports/fabublox", { method: "POST", body: form });
+  },
 };
 
 export interface TemplateRecord {
@@ -41,6 +65,7 @@ export interface TemplateRecord {
   templateType: "process" | "module" | "recipe";
   version: number;
   sourceFilename: string | null;
+  stepCount: number;
   createdAt: string;
 }
 

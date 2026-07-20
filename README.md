@@ -9,7 +9,7 @@ A low-friction, event-based sample log for fabrication work. The app is a single
 3. Import a FabuBlox Excel workbook in the browser and review its sheets and embedded media.
 4. Store each confirmed import as an immutable process, module, or recipe version.
 
-See [MVP_SPEC.md](./MVP_SPEC.md) for scope and [docs/DATA_MODEL.md](./docs/DATA_MODEL.md) for the data model.
+See [MVP_SPEC.md](./MVP_SPEC.md) for scope, [docs/DATA_MODEL.md](./docs/DATA_MODEL.md) for the data model, and [docs/FABUBLOX_IMPORT.md](./docs/FABUBLOX_IMPORT.md) for the workbook contract.
 
 ## Local development
 

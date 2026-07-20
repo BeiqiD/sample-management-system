@@ -12,19 +12,18 @@ Make recording fabrication history less painful than maintaining an Obsidian dat
 - Comments and directly captured images; browser-side compression is intentionally aggressive.
 - FabuBlox workbook parsing at `/imports/fabublox` before upload.
 - Extraction of worksheet values and OOXML embedded media.
+- Relationship- and anchor-aware mapping of FabuBlox layer-stack drawings to normalized steps.
 - Immutable process/module/recipe template versions at `/templates`.
+- Assigning a template version creates a run checklist; step status, notes, and images append to the sample timeline.
 - Export one sample as a ZIP containing Markdown, JSON, and all timeline images with relative paths.
 - D1 for records and private R2 for workbook/image assets.
 - Local development and one-Worker deployment.
 
 ## Next vertical slices
 
-1. Map FabuBlox drawing anchors to cells and steps instead of only preserving all embedded media.
-2. Assign a template version to a sample, creating a run and ordered run-step records.
-3. Add run-step statuses: `pending`, `in_progress`, `done`, `skipped`, and `blocked`.
-4. Record step comments and images in both the run and sample timeline.
-5. Export all versioned tables and R2 assets.
-6. Add Cloudflare Access deployment notes and authorization checks.
+1. Export all versioned tables and R2 assets.
+2. Add sample location/status mutations as explicit timeline events.
+3. Add Cloudflare Access deployment notes and authorization checks.
 
 ## Explicit exclusions for the first slice
 

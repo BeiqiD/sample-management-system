@@ -29,6 +29,32 @@ export interface SampleDetail extends SampleSummary {
   parent: Pick<SampleSummary, "id" | "code" | "title"> | null;
   children: Array<Pick<SampleSummary, "id" | "code" | "title">>;
   events: SampleEvent[];
+  runs: SampleRun[];
+}
+
+export interface RunStep {
+  id: string;
+  position: number;
+  title: string;
+  status: StepStatus;
+  notes: string | null;
+  toolName: string | null;
+  parametersText: string | null;
+  templateCommentsText: string | null;
+  templateImageKey: string | null;
+  updatedAt: string;
+}
+
+export interface SampleRun {
+  id: string;
+  templateVersionId: string;
+  templateName: string;
+  templateType: "process" | "module" | "recipe";
+  templateVersion: number;
+  status: "active" | "complete" | "cancelled";
+  createdAt: string;
+  completedAt: string | null;
+  steps: RunStep[];
 }
 
 export interface CreateSampleInput {
@@ -46,16 +72,66 @@ export interface CreateEventInput {
   metadata?: Record<string, unknown>;
 }
 
-export interface TemplatePreview {
+export interface FabubloxSection {
+  localId: string;
+  sourceRow: number;
   name: string;
-  sourceFile: string;
-  sheets: Array<{
-    name: string;
-    rows: unknown[][];
-  }>;
-  images: Array<{
-    filename: string;
-    mimeType: string;
-    data: Uint8Array;
-  }>;
+}
+
+export interface FabubloxStep {
+  localId: string;
+  sourceRow: number;
+  position: number;
+  stepNumber: string | null;
+  sectionName: string | null;
+  name: string;
+  toolName: string | null;
+  parametersText: string | null;
+  commentsText: string | null;
+  imageIds: string[];
+  rawCells: Record<string, unknown>;
+}
+
+export interface FabubloxImage {
+  localId: string;
+  sourcePart: string;
+  mimeType: string;
+  widthPx: number | null;
+  heightPx: number | null;
+  anchor: {
+    row: number;
+    col: number;
+    rowOffsetEmu?: number;
+    colOffsetEmu?: number;
+  };
+  assignedStepLocalId: string | null;
+}
+
+export interface ParsedFabubloxImage extends FabubloxImage {
+  data: Uint8Array;
+}
+
+export interface ImportWarning {
+  code: string;
+  message: string;
+  sourceRow?: number;
+}
+
+export interface FabubloxImportPreview {
+  schemaVersion: 1;
+  title: string;
+  source: {
+    fileName: string;
+    fileSha256: string;
+    sheetName: string;
+  };
+  detected: {
+    headerRow: number;
+    layerStackColumn: number | null;
+  };
+  sections: FabubloxSection[];
+  steps: FabubloxStep[];
+  images: ParsedFabubloxImage[];
+  unassignedImageIds: string[];
+  warnings: ImportWarning[];
 }

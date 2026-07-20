@@ -2,9 +2,10 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from "react"
 import { Link, useParams } from "react-router-dom";
 import type { SampleDetail } from "../../shared/types";
 import { StatusPill } from "../components/StatusPill";
-import { api } from "../lib/api";
+import { RunChecklist } from "../components/RunChecklist";
+import { api, type TemplateRecord } from "../lib/api";
 import { exportSample } from "../lib/exportSample";
-import { compressImage } from "../lib/images";
+import { compressCommentImage } from "../lib/images";
 
 export function SamplePage() {
   const { sampleId = "" } = useParams();
@@ -12,9 +13,21 @@ export function SamplePage() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [templates, setTemplates] = useState<TemplateRecord[]>([]);
+  const [templateVersionId, setTemplateVersionId] = useState("");
+  const [assigning, setAssigning] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const load = useCallback(() => api.getSample(sampleId).then(setSample).catch((error: Error) => setError(error.message)), [sampleId]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { api.listTemplates().then(({ templates }) => setTemplates(templates)).catch((error: Error) => setError(error.message)); }, []);
+
+  async function assignTemplate() {
+    if (!templateVersionId) return;
+    setAssigning(true); setError("");
+    try { await api.assignTemplate(sampleId, templateVersionId); setTemplateVersionId(""); await load(); }
+    catch (error) { setError((error as Error).message); }
+    finally { setAssigning(false); }
+  }
 
   async function addComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -26,11 +39,15 @@ export function SamplePage() {
     setSaving(true);
     try {
       let assetKey: string | undefined;
+      let thumbnailKey: string | undefined;
       if (image) {
-        const compressed = await compressImage(image);
-        assetKey = (await api.uploadAsset(compressed, compressed.name)).key;
+        const compressed = await compressCommentImage(image);
+        [assetKey, thumbnailKey] = await Promise.all([
+          api.uploadAsset(compressed.main, compressed.main.name).then((result) => result.key),
+          api.uploadAsset(compressed.thumbnail, compressed.thumbnail.name).then((result) => result.key),
+        ]);
       }
-      await api.createEvent(sampleId, { kind: image ? "image" : "comment", body, assetKey });
+      await api.createEvent(sampleId, { kind: image ? "image" : "comment", body, assetKey, metadata: thumbnailKey ? { thumbnailKey } : {} });
       form.reset();
       await load();
     } catch (error) { setError((error as Error).message); }
@@ -53,6 +70,8 @@ export function SamplePage() {
         <dl><dt>Location</dt><dd>{sample.location || "—"}</dd><dt>Parent</dt><dd>{sample.parent ? <Link to={`/samples/${sample.parent.id}`}>{sample.parent.code}</Link> : "—"}</dd><dt>Children</dt><dd>{sample.children.length ? sample.children.map((child) => <Link key={child.id} to={`/samples/${child.id}`}>{child.code}</Link>) : "—"}</dd><dt>Created</dt><dd>{new Date(sample.createdAt).toLocaleString()}</dd></dl>
       </aside>
       <section>
+        <div className="card assign-template"><div><strong>Assign a template</strong><small>Creates an independent run-step checklist.</small></div><select value={templateVersionId} onChange={(event) => setTemplateVersionId(event.target.value)}><option value="">Choose process, module, or recipe…</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name} · {template.templateType} v{template.version} · {template.stepCount} steps</option>)}</select><button className="button" disabled={!templateVersionId || assigning} onClick={() => void assignTemplate()}>{assigning ? "Assigning…" : "Assign"}</button></div>
+        {sample.runs.length > 0 && <section className="runs-section"><h2>Runs</h2>{sample.runs.map((run) => <RunChecklist key={run.id} sampleId={sampleId} run={run} onSaved={load} />)}</section>}
         <form className="card composer" onSubmit={addComment}>
           <label>Add a record<textarea name="body" rows={3} placeholder="Comment, observation, or step note…" /></label>
           <div className="composer-actions"><input ref={fileRef} name="image" type="file" accept="image/*" capture="environment" /><button className="button primary" disabled={saving}>{saving ? "Saving…" : "Add to timeline"}</button></div>
@@ -61,7 +80,7 @@ export function SamplePage() {
         <div className="timeline">
           {sample.events.map((event) => <article className="event" key={event.id}>
             <div className="event-dot" />
-            <div className="event-content"><div className="event-meta"><span>{event.kind}</span><time>{new Date(event.createdAt).toLocaleString()}</time></div>{event.body && <p>{event.body}</p>}{event.assetKey && <img src={`/api/assets/${event.assetKey}`} alt={event.body || "Sample record"} loading="lazy" />}</div>
+            <div className="event-content"><div className="event-meta"><span>{event.kind}</span><time>{new Date(event.createdAt).toLocaleString()}</time></div>{event.body && <p>{event.body}</p>}{event.assetKey && <a href={`/api/assets/${event.assetKey}`} target="_blank" rel="noreferrer"><img src={`/api/assets/${typeof event.metadata.thumbnailKey === "string" ? event.metadata.thumbnailKey : event.assetKey}`} alt={event.body || "Sample record"} loading="lazy" /></a>}</div>
           </article>)}
         </div>
       </section>

@@ -11,5 +11,6 @@
     "noEmit": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["worker", "shared"]
+  "include": ["worker", "shared"],
+  "exclude": ["**/*.test.ts"]
 }
