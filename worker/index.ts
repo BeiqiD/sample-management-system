@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import type { ConfirmRunStepsInput, CreateRecordInput, CreateRunStepCommentsInput, CreateRunStepInput, CreateSampleInput, CreateStateVerificationInput, RunStepTarget, SampleStatus, StepStatus, UpdateRunStepInput, UpdateSampleInput } from "../shared/types";
+import { MAX_SPLIT_PIECES, type ConfirmRunStepsInput, type CreateRecordInput, type CreateRunStepCommentsInput, type CreateRunStepInput, type CreateSampleInput, type CreateStateVerificationInput, type RunStepTarget, type SampleStatus, type SplitSampleInput, type StepStatus, type UpdateRunStepInput, type UpdateSampleInput } from "../shared/types";
 import { hashRecipeManifest, hashStateRepresentation, hashStepDefinition, logicalStepKey, sha256Hex, stableJson, STATE_HASH_SCHEME, STEP_HASH_SCHEME } from "../shared/content-addressing";
 import { alignFuturePlan } from "../shared/plan-alignment";
 import { isSampleRecordEvent } from "../shared/sample-records";
@@ -197,7 +197,8 @@ app.get("/samples", async (c) => {
 
 app.post("/samples", async (c) => {
   const input = await c.req.json<CreateSampleInput>();
-  if (typeof input.code !== "string" || typeof input.title !== "string" || (input.description !== undefined && typeof input.description !== "string") || (input.location !== undefined && typeof input.location !== "string") || (input.parentId !== undefined && typeof input.parentId !== "string")) {
+  const allowedStatuses: SampleStatus[] = ["active", "stored", "consumed", "lost"];
+  if (typeof input.code !== "string" || typeof input.title !== "string" || (input.description !== undefined && typeof input.description !== "string") || (input.location !== undefined && typeof input.location !== "string") || (input.status !== undefined && !allowedStatuses.includes(input.status)) || (input.parentId !== undefined && typeof input.parentId !== "string")) {
     throw new HTTPException(400, { message: "Invalid sample fields" });
   }
   const code = input.code.trim();
@@ -211,12 +212,13 @@ app.post("/samples", async (c) => {
   const eventId = crypto.randomUUID();
   const now = new Date().toISOString();
   const userEmail = c.get("userEmail");
+  const status = input.status ?? "stored";
   try {
     await c.env.DB.batch([
       c.env.DB.prepare(
-        `INSERT INTO samples (id, code, title, description, location, parent_id, created_by, updated_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(id, code, title, input.description?.trim() || null, input.location?.trim() || null, input.parentId || null, userEmail, userEmail, now, now),
+        `INSERT INTO samples (id, code, title, description, status, location, parent_id, created_by, updated_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(id, code, title, input.description?.trim() || null, status, input.location?.trim() || null, input.parentId || null, userEmail, userEmail, now, now),
       c.env.DB.prepare(
         "INSERT INTO events (id, sample_id, kind, body, actor_email, created_at) VALUES (?, ?, 'created', ?, ?, ?)",
       ).bind(eventId, id, `Sample ${code} created`, userEmail, now),
@@ -226,6 +228,100 @@ app.post("/samples", async (c) => {
     throw error;
   }
   return c.json({ id }, 201);
+});
+
+app.post("/samples/:id/split", async (c) => {
+  const parentId = c.req.param("id");
+  const input = await c.req.json<SplitSampleInput>();
+  const allowedStatuses: SampleStatus[] = ["active", "stored", "consumed", "lost"];
+  if (!input || typeof input.expectedUpdatedAt !== "string"
+    || (input.parentStatusAfter !== "active" && input.parentStatusAfter !== "consumed")
+    || !Array.isArray(input.pieces) || input.pieces.length < 1 || input.pieces.length > MAX_SPLIT_PIECES) {
+    throw new HTTPException(400, { message: `A split requires 1–${MAX_SPLIT_PIECES} valid pieces and a parent status` });
+  }
+
+  const pieces = input.pieces.map((piece) => {
+    if (!piece || typeof piece !== "object" || typeof piece.code !== "string" || typeof piece.title !== "string"
+      || typeof piece.location !== "string" || !allowedStatuses.includes(piece.status)
+      || (piece.description !== undefined && typeof piece.description !== "string")) {
+      throw new HTTPException(400, { message: "Every split piece needs valid sample fields" });
+    }
+    const normalized = {
+      code: piece.code.trim(),
+      title: piece.title.trim(),
+      description: piece.description?.trim() || null,
+      location: piece.location.trim(),
+      status: piece.status,
+    };
+    if (!normalized.code || !normalized.title || !normalized.location) {
+      throw new HTTPException(400, { message: "Every split piece needs a code, short title, and location" });
+    }
+    if (normalized.code.length > 100 || normalized.title.length > 200 || (normalized.description?.length ?? 0) > 10_000 || normalized.location.length > 500) {
+      throw new HTTPException(400, { message: "One or more split-piece fields are too long" });
+    }
+    return normalized;
+  });
+  const normalizedCodes = pieces.map((piece) => piece.code.toLocaleLowerCase());
+  if (new Set(normalizedCodes).size !== normalizedCodes.length) {
+    throw new HTTPException(409, { message: "Every new piece must have a unique sample code" });
+  }
+
+  const parent = await c.env.DB.prepare(
+    "SELECT code, updated_at FROM samples WHERE id = ?",
+  ).bind(parentId).first<{ code: string; updated_at: string }>();
+  if (!parent) throw new HTTPException(404, { message: "Parent sample not found" });
+  if (parent.updated_at !== input.expectedUpdatedAt) {
+    throw new HTTPException(409, { message: "This sample changed elsewhere. Reload it before splitting." });
+  }
+
+  const now = new Date().toISOString();
+  const userEmail = c.get("userEmail");
+  const mutationId = crypto.randomUUID();
+  const children = pieces.map((piece) => ({ ...piece, id: crypto.randomUUID() }));
+  const statements: D1PreparedStatement[] = [];
+  for (const child of children) {
+    statements.push(
+      c.env.DB.prepare(
+        `INSERT INTO samples (id, code, title, description, status, location, parent_id, created_by, updated_by, created_at, updated_at)
+         SELECT ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ? FROM samples WHERE id = ? AND updated_at = ?`,
+      ).bind(child.id, child.code, child.title, child.description, child.status, child.location, userEmail, userEmail, now, now, parentId, input.expectedUpdatedAt),
+      c.env.DB.prepare(
+        `INSERT INTO events (id, sample_id, kind, body, metadata_json, actor_email, created_at)
+         SELECT ?, id, 'created', ?, ?, ?, ? FROM samples WHERE id = ? AND parent_id = ?`,
+      ).bind(
+        crypto.randomUUID(), `Created by splitting parent ${parent.code}`,
+        JSON.stringify({ action: "created_by_split", parentId, parentCode: parent.code }), userEmail, now, child.id, parentId,
+      ),
+    );
+  }
+  const childCodes = children.map((child) => child.code);
+  statements.push(
+    c.env.DB.prepare(
+      `INSERT INTO events (id, sample_id, kind, body, metadata_json, actor_email, created_at)
+       SELECT ?, id, 'status', ?, ?, ?, ? FROM samples WHERE id = ? AND updated_at = ?`,
+    ).bind(
+      crypto.randomUUID(), `Split into ${children.length} child samples: ${childCodes.join(", ")}`,
+      JSON.stringify({ action: "sample_split", childIds: children.map((child) => child.id), childCodes, parentStatusAfter: input.parentStatusAfter }),
+      userEmail, now, parentId, input.expectedUpdatedAt,
+    ),
+    c.env.DB.prepare(
+      `UPDATE samples SET status = ?, updated_by = ?, last_mutation_id = ?, updated_at = ?
+       WHERE id = ? AND updated_at = ?`,
+    ).bind(input.parentStatusAfter, userEmail, mutationId, now, parentId, input.expectedUpdatedAt),
+  );
+
+  try {
+    const results = await c.env.DB.batch(statements);
+    if (!results.at(-1)?.meta.changes) {
+      throw new HTTPException(409, { message: "This sample changed elsewhere. Reload it before splitting." });
+    }
+    if (results.some((result) => !result.meta.changes)) throw new Error("The complete split audit trail was not created");
+  } catch (error) {
+    if (error instanceof HTTPException) throw error;
+    if (String(error).includes("UNIQUE")) throw new HTTPException(409, { message: "One or more generated sample codes already exist" });
+    throw error;
+  }
+  return c.json({ children: children.map(({ id, code }) => ({ id, code })), updatedAt: now }, 201);
 });
 
 app.get("/samples/:id", async (c) => {

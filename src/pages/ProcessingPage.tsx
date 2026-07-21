@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import type { SampleRun, SampleSummary } from "../../shared/types";
 import { EmptyState } from "../components/EmptyState";
+import { SampleStateThumbnail } from "../components/SampleStateThumbnail";
 import { api } from "../lib/api";
 
 type ProcessingFilter = "active" | "complete" | "cancelled" | "all";
@@ -77,6 +78,7 @@ export function ProcessingPage() {
     {error && <p className="error-banner">{error}</p>}
     {loading ? <p className="muted">Loading…</p> : visibleSamples.length ? <div className="processing-list">
       {visibleSamples.map((sample) => <Link to={`/processing/${sample.id}`} className="processing-row" key={sample.id}>
+        <SampleStateThumbnail sample={sample} />
         <div className="processing-sample"><strong className="sample-code">{sample.code}</strong><span>{sample.title}</span><small>{sample.location || "No location"}</small></div>
         <div className="processing-workflow"><small>{sample.currentRecipeName ? "Workflow" : "Plan"}</small><strong>{sample.currentRecipeName ? `${sample.currentRecipeName}${sample.currentRecipeVersion != null ? ` · v${sample.currentRecipeVersion}` : ""}` : "No workflow assigned"}</strong><span>{sample.currentStepTitle ? `Next · ${sample.currentStepTitle}` : sample.currentRecipeStatus === "complete" ? "All steps completed" : "Open to assign a workflow"}</span></div>
         <div className="processing-row-side"><span className={`run-status run-status-${sample.currentRecipeStatus || "ready"}`}>{runStatusLabel(sample.currentRecipeStatus)}</span><time>{new Date(sample.updatedAt).toLocaleDateString()}</time></div>

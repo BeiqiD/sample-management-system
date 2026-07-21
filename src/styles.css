@@ -210,7 +210,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .compact-search { width: min(430px, 100%); margin: 0; }
 .compact-search input { height: 46px; font-size: 14px; }
 .processing-list { border-top: 1px solid var(--line); }
-.processing-row { min-height: 92px; display: grid; grid-template-columns: minmax(190px, .9fr) minmax(300px, 1.5fr) auto; gap: 24px; align-items: center; padding: 14px 12px; border-bottom: 1px solid var(--line); text-decoration: none; }
+.processing-row { min-height: 122px; display: grid; grid-template-columns: 120px minmax(140px, .9fr) minmax(220px, 1.5fr) auto; gap: 16px; align-items: center; padding: 14px 12px; border-bottom: 1px solid var(--line); text-decoration: none; }
 .processing-row:hover { background: var(--surface); box-shadow: inset 3px 0 var(--accent); }
 .processing-sample, .processing-workflow { min-width: 0; display: grid; gap: 4px; }
 .processing-sample > span, .processing-workflow > strong { overflow-wrap: anywhere; }
@@ -495,6 +495,30 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .confirm-dialog > p:not(.eyebrow, .error-banner) { margin: 0; color: var(--muted); font-size: 13px; }
 .confirm-dialog blockquote { max-height: 120px; margin: 16px 0; padding: 10px 12px; overflow: auto; border-left: 3px solid var(--danger); color: var(--ink); background: var(--danger-soft); font-size: 12px; white-space: pre-wrap; }
 .confirm-dialog .error-banner { margin: 12px 0 0; }
+.split-dialog-backdrop { position: fixed; inset: 0; z-index: 55; display: grid; place-items: center; padding: 20px; background: var(--overlay); backdrop-filter: blur(3px); }
+.split-dialog { width: min(760px, 100%); max-height: calc(100vh - 40px); padding: 24px; overflow-y: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); box-shadow: 0 20px 70px rgba(20,25,21,.22); }
+.split-dialog-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; }
+.split-dialog-heading .eyebrow { margin-bottom: 5px; }
+.split-dialog-heading h2 { margin: 0; overflow-wrap: anywhere; font-size: 24px; }
+.split-dialog > .muted { margin: 18px 0 14px; }
+.split-setup-grid { display: grid; grid-template-columns: minmax(0, .75fr) minmax(0, 1.25fr); gap: 16px; }
+.split-setup-grid label, .split-piece-fields label { min-width: 0; display: grid; align-content: start; gap: 7px; color: var(--ink); font-size: 13px; font-weight: 700; }
+.split-setup-grid label small { color: var(--muted); font-size: 11px; font-weight: 400; }
+.split-common-location { grid-column: 1 / -1; }
+.split-review-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin-top: 18px; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--line); }
+.split-review-summary > div { min-width: 0; display: grid; gap: 3px; padding: 11px 12px; background: var(--surface-muted); }
+.split-review-summary span { color: var(--muted); font-size: 10px; font-weight: 720; text-transform: uppercase; letter-spacing: .06em; }
+.split-review-summary strong { overflow-wrap: anywhere; font-size: 13px; }
+.split-piece-list { display: grid; gap: 8px; }
+.split-piece { border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
+.split-piece[open] { border-color: var(--line-strong); }
+.split-piece summary { display: grid; grid-template-columns: 70px minmax(120px, 1fr) minmax(150px, auto); gap: 12px; align-items: center; padding: 12px 14px; cursor: pointer; }
+.split-piece summary::marker { color: var(--accent); }
+.split-piece summary span { color: var(--muted); font-size: 11px; font-weight: 720; text-transform: uppercase; letter-spacing: .05em; }
+.split-piece summary strong, .split-piece summary small { min-width: 0; overflow-wrap: anywhere; }
+.split-piece summary small { color: var(--muted); font-size: 11px; text-align: right; text-transform: capitalize; }
+.split-piece-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 14px; border-top: 1px solid var(--line); background: var(--surface); }
+.split-piece-description { grid-column: 1 / -1; }
 .sample-record-layout { padding-top: 40px; border-top: 1px solid var(--line); }
 .sample-overview-page { width: min(1180px, calc(100% - 40px)); }
 .sample-overview-grid { display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 28px; align-items: start; }
@@ -629,9 +653,11 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   .segmented-control { overflow-x: auto; }
   .segmented-control button { flex: 1 0 auto; justify-content: center; }
   .compact-search { width: 100%; }
-  .processing-row { grid-template-columns: 1fr auto; gap: 12px; }
-  .processing-workflow { grid-column: 1 / -1; padding-top: 9px; border-top: 1px solid var(--line); }
-  .processing-row-side { grid-column: 2; grid-row: 1; min-width: 0; }
+  .processing-row { grid-template-columns: 92px minmax(0, 1fr); gap: 10px 12px; }
+  .processing-row > .sample-state-thumbnail { grid-column: 1; grid-row: 1 / span 2; }
+  .processing-sample { grid-column: 2; grid-row: 1; }
+  .processing-workflow { grid-column: 1 / -1; grid-row: 3; padding-top: 9px; border-top: 1px solid var(--line); }
+  .processing-row-side { grid-column: 2; grid-row: 2; min-width: 0; flex-direction: row; align-items: center; }
   .facts { position: static; }
   .composer-actions { align-items: stretch; flex-direction: column; }
   .assign-template { grid-template-columns: 1fr; }
@@ -694,4 +720,12 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   .comment-thumbnail-gallery { flex-basis: 100%; }
   .timeline-toolbar { align-items: flex-start; flex-direction: column; }
   .step-drawer { padding: 18px; }
+  .split-dialog-backdrop { padding: 10px; }
+  .split-dialog { max-height: calc(100vh - 20px); padding: 18px; }
+  .split-setup-grid, .split-review-summary, .split-piece-fields { grid-template-columns: 1fr; }
+  .split-common-location, .split-piece-description { grid-column: auto; }
+  .split-piece summary { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; }
+  .split-piece summary span { grid-column: 1; }
+  .split-piece summary strong { grid-column: 1; }
+  .split-piece summary small { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
 }

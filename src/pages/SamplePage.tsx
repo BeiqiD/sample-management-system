@@ -4,6 +4,7 @@ import { isSampleRecordEvent } from "../../shared/sample-records";
 import type { SampleDetail, SampleEvent, SampleRun, SampleStatus } from "../../shared/types";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { FileDropzone } from "../components/FileDropzone";
+import { SplitSampleDialog } from "../components/SplitSampleDialog";
 import { StatusPill } from "../components/StatusPill";
 import { api } from "../lib/api";
 import { exportSample } from "../lib/exportSample";
@@ -39,6 +40,7 @@ export function SamplePage() {
   const [assetDeleteError, setAssetDeleteError] = useState("");
   const [deletingAsset, setDeletingAsset] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [splitting, setSplitting] = useState(false);
   const pendingUploadRef = useRef<{ signature: string; assetKey?: string; thumbnailKey?: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -142,7 +144,7 @@ export function SamplePage() {
     <Link className="back-link" to="/samples">← Samples</Link>
     <div className="sample-header">
       <div className="sample-header-copy"><p className="eyebrow">{sample.code}</p><h1>{sample.title}</h1><p className="lead">{sample.description || "No description"}</p></div>
-      <div className="header-actions"><StatusPill status={sample.status} /><Link className="button primary" to={`/processing/${sample.id}${activeRun ? `?run=${encodeURIComponent(activeRun.id)}` : ""}`}>Open processing</Link><a className="button" href="#sample-record">Add record</a><Link className="button" to={`/samples/new?parentId=${encodeURIComponent(sample.id)}`}>Create child</Link><button className="button" disabled={exporting} onClick={() => {
+      <div className="header-actions"><StatusPill status={sample.status} /><Link className="button primary" to={`/processing/${sample.id}${activeRun ? `?run=${encodeURIComponent(activeRun.id)}` : ""}`}>Open processing</Link><a className="button" href="#sample-record">Add record</a><button className="button" onClick={() => setSplitting(true)}>Split sample</button><button className="button" disabled={exporting} onClick={() => {
         setExporting(true);
         void exportSample(sample).catch((error: Error) => setError(error.message)).finally(() => setExporting(false));
       }}>{exporting ? "Exporting…" : "Export ZIP"}</button></div>
@@ -196,5 +198,6 @@ export function SamplePage() {
     </section>
     {recordToDelete && <ConfirmDeleteDialog title="Delete this sample record?" description="The record will disappear from the current view, while the Timeline will retain an audit entry." summary={recordToDelete.body?.trim() || (recordToDelete.assetKey ? "Photo record" : "Empty record")} deleting={deletingRecord} error={recordDeleteError} eyebrow="Delete record" confirmLabel="Delete record" onCancel={() => { setRecordToDelete(null); setRecordDeleteError(""); }} onConfirm={() => void deleteRecord()} />}
     {assetToDelete && <ConfirmDeleteDialog title="Delete this image attachment?" description="The image will be detached from the record. The Timeline will retain a text-only audit entry showing that an image was removed." summary={assetToDelete.body?.trim() || "Image attachment"} deleting={deletingAsset} error={assetDeleteError} eyebrow="Delete image" confirmLabel="Delete image" onCancel={() => { setAssetToDelete(null); setAssetDeleteError(""); }} onConfirm={() => void deleteAsset()} />}
+    {splitting && <SplitSampleDialog sample={sample} onCancel={() => setSplitting(false)} onComplete={async () => { setSplitting(false); await load(); }} />}
   </div>;
 }

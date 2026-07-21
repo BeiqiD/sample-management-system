@@ -1,6 +1,7 @@
 export type SampleStatus = "active" | "stored" | "consumed" | "lost";
 export type StepStatus = "pending" | "in_progress" | "done" | "skipped" | "blocked";
 export type EventKind = "comment" | "image" | "location" | "status" | "created" | "step" | "run" | "plan" | "verification";
+export const MAX_SPLIT_PIECES = 32;
 
 export interface SampleSummary {
   id: string;
@@ -181,7 +182,22 @@ export interface CreateSampleInput {
   title: string;
   description?: string;
   location?: string;
+  status?: SampleStatus;
   parentId?: string;
+}
+
+export interface SplitSamplePieceInput {
+  code: string;
+  title: string;
+  description?: string;
+  location: string;
+  status: SampleStatus;
+}
+
+export interface SplitSampleInput {
+  expectedUpdatedAt: string;
+  parentStatusAfter: "active" | "consumed";
+  pieces: SplitSamplePieceInput[];
 }
 
 export interface UpdateSampleInput {
