@@ -346,7 +346,10 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .comment-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .comment-attach-button, .comment-cancel-button { width: 32px; height: 32px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; color: var(--accent); background: transparent; font-size: 16px; font-weight: 700; }
 .comment-attach-button:hover, .comment-cancel-button:hover { background: var(--accent-soft); }
-.comment-attach-button > span:first-child { display: grid; place-items: center; width: 23px; height: 23px; border: 1px solid #9cb9aa; border-radius: 50%; }
+.comment-attach-icon { position: relative; display: block; width: 23px; height: 23px; border: 1px solid #9cb9aa; border-radius: 50%; }
+.comment-attach-icon::before, .comment-attach-icon::after { position: absolute; top: 50%; left: 50%; border-radius: 1px; background: currentColor; content: ""; transform: translate(-50%, -50%); }
+.comment-attach-icon::before { width: 10px; height: 2px; }
+.comment-attach-icon::after { width: 2px; height: 10px; }
 .comment-cancel-button { color: var(--muted); font-size: 18px; }
 .pending-comment-image { position: relative; width: 32px; height: 32px; flex: 0 0 auto; }
 .pending-comment-image img { width: 32px; height: 32px; border-radius: 5px; object-fit: cover; }
