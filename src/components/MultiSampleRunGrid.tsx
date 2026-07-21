@@ -1,9 +1,10 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { RunStep, RunStepComment, SampleRun, StepStatus } from "../../shared/types";
 import { api } from "../lib/api";
 import { visibleAlphaBounds } from "../lib/diagramImage";
 import { compressCommentImage, compressLayerStackImage } from "../lib/images";
+import { parameterEntryCount } from "../lib/recipeDetails";
 import { buildRunGrid, type RunGridColumn } from "../lib/runGrid";
 import { runStepIsModified } from "../lib/runSteps";
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog";
@@ -20,6 +21,8 @@ type DeleteRequest =
   | { kind: "comment"; comment: RunStepComment; common: boolean }
   | { kind: "comment_asset"; comment: RunStepComment; common: boolean }
   | { kind: "execution_asset"; assetKey: string; column: RunGridColumn; step: RunStep };
+
+type RecipeDetailsState = { step: RunStep; number: number } | null;
 
 function target(column: RunGridColumn, step: RunStep) {
   if (!column.run) throw new Error("This sample has no matching run");
@@ -132,7 +135,7 @@ function DiagramGallery({ keys, label, kind = "diagram", size = "compact", onDel
     document.body.style.overflow = "hidden";
     closeButtonRef.current?.focus();
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setActiveIndex(null);
+      if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); setActiveIndex(null); }
       if (event.key === "ArrowLeft") setActiveIndex((current) => current === null ? null : (current - 1 + keys.length) % keys.length);
       if (event.key === "ArrowRight") setActiveIndex((current) => current === null ? null : (current + 1) % keys.length);
       if (["+", "="].includes(event.key)) { event.preventDefault(); setZoom((current) => Math.min(5, current + .25)); }
@@ -194,6 +197,38 @@ function DiagramGallery({ keys, label, kind = "diagram", size = "compact", onDel
     })}</div>
     {lightbox}
   </>;
+}
+
+function RecipeDetailsSheet({ state, onClose }: { state: NonNullable<RecipeDetailsState>; onClose: () => void }) {
+  const { step, number } = state;
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeButtonRef.current?.focus();
+    function onKeyDown(event: KeyboardEvent) { if (event.key === "Escape") onClose(); }
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
+
+  return createPortal(<div className="recipe-details-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="recipe-details-sheet" role="dialog" aria-modal="true" aria-labelledby="recipe-details-title">
+      <div className="recipe-details-handle" aria-hidden="true" />
+      <div className="recipe-details-heading">
+        <div><p className="eyebrow">Recipe step {number}</p><h2 id="recipe-details-title">{step.plannedTitle || step.title}</h2>{step.plannedToolName && <small>{step.plannedToolName}</small>}</div>
+        <button ref={closeButtonRef} type="button" className="drawer-close" onClick={onClose} aria-label="Close recipe details">×</button>
+      </div>
+      <div className="recipe-details-content">
+        {step.plannedParametersText && <div className="recipe-field"><small>Parameters</small><p>{step.plannedParametersText}</p></div>}
+        {step.plannedCommentsText && <div className="recipe-field"><small>Plan note</small><p>{step.plannedCommentsText}</p></div>}
+        <DiagramGallery keys={step.plannedImageKeys} label={`Plan diagram for ${step.title}`} />
+        {!step.plannedParametersText && !step.plannedCommentsText && !step.plannedImageKeys.length && <p className="muted">No additional recipe details.</p>}
+      </div>
+    </section>
+  </div>, document.body);
 }
 
 function CommentCard({ comment, meta, imageLabel, onDelete, onDeleteAsset, common = false }: {
@@ -323,6 +358,7 @@ export function MultiSampleRunGrid({ columns, primaryRun, onSaved, readOnly = fa
   const [drawer, setDrawer] = useState<DrawerState>(null);
   const [deleteRequest, setDeleteRequest] = useState<DeleteRequest | null>(null);
   const [deleteError, setDeleteError] = useState("");
+  const [recipeDetails, setRecipeDetails] = useState<RecipeDetailsState>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [scrollState, setScrollState] = useState({ overflow: false, left: false, right: false });
@@ -331,6 +367,7 @@ export function MultiSampleRunGrid({ columns, primaryRun, onSaved, readOnly = fa
   const scroller = useRef<HTMLDivElement>(null);
   const fullHeader = useRef<HTMLDivElement>(null);
   const stickySampleTrack = useRef<HTMLDivElement>(null);
+  const closeRecipeDetails = useCallback(() => setRecipeDetails(null), []);
 
   useEffect(() => {
     const currentNode = scroller.current;
@@ -548,11 +585,13 @@ export function MultiSampleRunGrid({ columns, primaryRun, onSaved, readOnly = fa
           }));
           const eligibleCount = entries.filter(({ column, step }) => selected.has(column.sample.id) && ["pending", "in_progress"].includes(step.status)).length;
           const recipeNumber = rows.slice(0, rowIndex + 1).filter((candidate) => candidate.kind === "template").length;
+          const parameterCount = parameterEntryCount(row.recipeStep?.plannedParametersText);
           return <div className="run-grid-row" key={row.key} style={{ display: "contents" }}>
             <div className={`recipe-cell recipe-column${row.kind === "ad_hoc" ? " additional-step-recipe-cell" : ""}`}>
               {row.kind === "ad_hoc" ? <div className="recipe-step-heading"><span>+</span><div><strong>Additional step</strong><small>Not part of the assigned recipe</small></div></div> : <>
-              <div className="recipe-step-heading"><span>{recipeNumber}</span><div><strong>{row.recipeStep?.plannedTitle || row.recipeStep?.title}</strong>{row.recipeStep?.plannedToolName && <small>{row.recipeStep.plannedToolName}</small>}</div></div>
-              <div className="recipe-content-split"><div>{row.recipeStep?.plannedParametersText && <div className="recipe-field"><small>Parameters</small><p>{row.recipeStep.plannedParametersText}</p></div>}{row.recipeStep?.plannedCommentsText && <div className="recipe-field"><small>Plan note</small><p>{row.recipeStep.plannedCommentsText}</p></div>}</div>{row.recipeStep && <DiagramGallery keys={row.recipeStep.plannedImageKeys} label={`Plan diagram for ${row.recipeStep.title}`} size="wide" />}</div>
+              <div className="recipe-step-heading recipe-step-heading-desktop"><span>{recipeNumber}</span><div><strong>{row.recipeStep?.plannedTitle || row.recipeStep?.title}</strong>{row.recipeStep?.plannedToolName && <small>{row.recipeStep.plannedToolName}</small>}</div></div>
+              {row.recipeStep && <button type="button" className="recipe-step-heading recipe-details-trigger" onClick={() => setRecipeDetails({ step: row.recipeStep!, number: recipeNumber })} aria-label={`View recipe details for ${row.recipeStep.plannedTitle || row.recipeStep.title}`}><span>{recipeNumber}</span><span><strong>{row.recipeStep.plannedTitle || row.recipeStep.title}</strong>{parameterCount > 0 && <small>{parameterCount} parameter{parameterCount === 1 ? "" : "s"}</small>}</span><b aria-hidden="true">›</b></button>}
+              <div className="recipe-content-split recipe-desktop-details"><div>{row.recipeStep?.plannedParametersText && <div className="recipe-field"><small>Parameters</small><p>{row.recipeStep.plannedParametersText}</p></div>}{row.recipeStep?.plannedCommentsText && <div className="recipe-field"><small>Plan note</small><p>{row.recipeStep.plannedCommentsText}</p></div>}</div>{row.recipeStep && <DiagramGallery keys={row.recipeStep.plannedImageKeys} label={`Plan diagram for ${row.recipeStep.title}`} size="wide" />}</div>
               {commonGroups.size > 0 && <div className="common-comments"><small>Common execution comments</small>{[...commonGroups.values()].map(({ comment, codes }) => <CommentCard
                 key={comment.operationGroupId || comment.id}
                 comment={comment}
@@ -576,6 +615,7 @@ export function MultiSampleRunGrid({ columns, primaryRun, onSaved, readOnly = fa
       </div>
     </div>
     {drawer && <StepDrawer key={`${drawer.mode}:${drawer.mode === "edit" ? drawer.step.id : `${drawer.column.sample.id}:${drawer.afterStepId || "first"}`}`} state={drawer} onClose={() => setDrawer(null)} onSaved={onSaved} />}
+    {recipeDetails && <RecipeDetailsSheet state={recipeDetails} onClose={closeRecipeDetails} />}
     {deleteRequest && <ConfirmDeleteDialog
       title={deleteRequest.kind === "comment" ? "Delete this comment?" : deleteRequest.kind === "comment_asset" ? "Delete this comment attachment?" : "Delete this execution image?"}
       description={deleteRequest.kind === "comment"
