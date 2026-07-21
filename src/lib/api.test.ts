@@ -27,6 +27,28 @@ describe("comment deletion API", () => {
   });
 });
 
+describe("sample split API", () => {
+  it("submits every child as one parent-scoped operation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ children: [{ id: "child-1", code: "SOD-1-1" }], updatedAt: "now" }), {
+      headers: { "content-type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const input = {
+      expectedUpdatedAt: "before",
+      parentStatusAfter: "consumed" as const,
+      pieces: [{ code: "SOD-1-1", title: "Piece", description: "", location: "Box B", status: "stored" as const }],
+    };
+    await api.splitSample("parent-1", input);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/samples/parent-1/split", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  });
+});
+
 describe("template removal API", () => {
   it("uses the guarded template delete endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, disposition: "deleted" }), {

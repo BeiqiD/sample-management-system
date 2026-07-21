@@ -1,18 +1,12 @@
-import { type FormEvent, useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import type { SampleDetail } from "../../shared/types";
+import { type FormEvent, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import type { SampleStatus } from "../../shared/types";
 import { api } from "../lib/api";
 
 export function NewSamplePage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const parentId = searchParams.get("parentId") || "";
-  const [parent, setParent] = useState<SampleDetail | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => {
-    if (parentId) api.getSample(parentId).then(setParent).catch((error: Error) => setError(error.message));
-  }, [parentId]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -24,7 +18,7 @@ export function NewSamplePage() {
         title: String(form.get("title")),
         description: String(form.get("description")),
         location: String(form.get("location")),
-        parentId: parentId || undefined,
+        status: String(form.get("status")) as SampleStatus,
       });
       navigate(`/samples/${id}`);
     } catch (error) {
@@ -34,15 +28,15 @@ export function NewSamplePage() {
   }
 
   return <div className="page form-page">
-    <p className="eyebrow">Samples</p><h1>{parentId ? "New child sample" : "New sample"}</h1>
-    {parentId && <div className="card parent-context"><span>Parent sample</span><strong>{parent ? `${parent.code} · ${parent.title}` : "Loading parent…"}</strong></div>}
+    <p className="eyebrow">Samples</p><h1>New sample</h1>
     <form className="card form-grid" onSubmit={submit}>
       <label>Sample code<input name="code" required placeholder="e.g. SOD-2026-014" /></label>
       <label>Short title<input name="title" required placeholder="What is this sample?" /></label>
+      <label>Status<select name="status" defaultValue="stored"><option value="stored">Stored</option><option value="active">Active</option><option value="consumed">Consumed</option><option value="lost">Lost</option></select></label>
       <label>Current location<input name="location" placeholder="Box, lab, or tool" /></label>
       <label>Description<textarea name="description" rows={5} placeholder="Optional starting context" /></label>
       {error && <p className="error-banner">{error}</p>}
-      <div className="form-actions"><Link to={parentId ? `/samples/${parentId}` : "/"} className="button">Cancel</Link><button className="button primary" disabled={saving || Boolean(parentId && !parent)}>{saving ? "Creating…" : "Create sample"}</button></div>
+      <div className="form-actions"><Link to="/samples" className="button">Cancel</Link><button className="button primary" disabled={saving}>{saving ? "Creating…" : "Create sample"}</button></div>
     </form>
   </div>;
 }

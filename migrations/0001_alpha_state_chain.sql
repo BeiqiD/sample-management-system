@@ -8,7 +8,7 @@ CREATE TABLE samples (
   code TEXT NOT NULL UNIQUE,
   title TEXT NOT NULL,
   description TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'stored', 'consumed', 'lost')),
+  status TEXT NOT NULL DEFAULT 'stored' CHECK (status IN ('active', 'stored', 'consumed', 'lost')),
   location TEXT,
   parent_id TEXT REFERENCES samples(id) ON DELETE SET NULL,
   pinned INTEGER NOT NULL DEFAULT 0,
