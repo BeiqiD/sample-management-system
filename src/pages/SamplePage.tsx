@@ -158,6 +158,7 @@ export function SamplePage() {
     setUpdatingDetails(true); setError("");
     try {
       await api.updateSample(sampleId, {
+        title: String(form.get("title")),
         status: String(form.get("status")) as SampleStatus,
         location: String(form.get("location")),
         pinned: form.get("pinned") === "on",
@@ -210,11 +211,13 @@ export function SamplePage() {
       <aside className="card facts">
         <div className="card-title-row"><h2>Sample details</h2><button className="text-button" onClick={() => setEditingDetails((value) => !value)}>{editingDetails ? "Cancel" : "Edit"}</button></div>
         {editingDetails ? <form className="detail-form" onSubmit={updateDetails}>
+          <label>Sample code<input value={sample.code} readOnly aria-readonly="true" title="Sample code is a permanent identifier" /></label>
+          <label>Short title<input name="title" defaultValue={sample.title} required maxLength={200} /></label>
           <label>Status<select name="status" defaultValue={sample.status}><option value="active">Active</option><option value="stored">Stored</option><option value="consumed">Consumed</option><option value="lost">Lost</option></select></label>
           <label>Location<input name="location" defaultValue={sample.location || ""} placeholder="Box, lab, or tool" /></label>
           <label className="checkbox-label"><input name="pinned" type="checkbox" defaultChecked={sample.pinned} />Pinned</label>
           <button className="button primary wide" disabled={updatingDetails}>{updatingDetails ? "Saving…" : "Save changes"}</button>
-        </form> : <dl><dt>Status</dt><dd>{sample.status}</dd><dt>Location</dt><dd>{sample.location || "—"}</dd><dt>Pinned</dt><dd>{sample.pinned ? "Yes" : "No"}</dd><dt>Parent</dt><dd>{sample.parent ? <Link to={`/samples/${sample.parent.id}`}>{sample.parent.code}</Link> : "—"}</dd><dt>Children</dt><dd>{sample.children.length ? sample.children.map((child) => <Link key={child.id} to={`/samples/${child.id}`}>{child.code}</Link>) : "—"}</dd><dt>Created</dt><dd>{new Date(sample.createdAt).toLocaleString()}</dd></dl>}
+        </form> : <dl><dt>Sample code</dt><dd>{sample.code}</dd><dt>Short title</dt><dd>{sample.title}</dd><dt>Status</dt><dd>{sample.status}</dd><dt>Location</dt><dd>{sample.location || "—"}</dd><dt>Pinned</dt><dd>{sample.pinned ? "Yes" : "No"}</dd><dt>Parent</dt><dd>{sample.parent ? <Link to={`/samples/${sample.parent.id}`}>{sample.parent.code}</Link> : "—"}</dd><dt>Children</dt><dd>{sample.children.length ? sample.children.map((child) => <Link key={child.id} to={`/samples/${child.id}`}>{child.code}</Link>) : "—"}</dd><dt>Created</dt><dd>{new Date(sample.createdAt).toLocaleString()}</dd></dl>}
       </aside>
       <section>
         <div className="section-heading sample-record-heading"><div><p className="eyebrow">Sample-level information</p><h2>Sample record</h2></div></div>
