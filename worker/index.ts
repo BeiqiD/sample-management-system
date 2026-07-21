@@ -412,30 +412,33 @@ app.patch("/samples/:id", async (c) => {
   const id = c.req.param("id");
   const input = await c.req.json<UpdateSampleInput>();
   const allowedStatuses: SampleStatus[] = ["active", "stored", "consumed", "lost"];
-  if (typeof input.expectedUpdatedAt !== "string" || (input.location !== undefined && typeof input.location !== "string") || (input.pinned !== undefined && typeof input.pinned !== "boolean")) throw new HTTPException(400, { message: "Invalid sample update" });
+  if ("code" in input) throw new HTTPException(400, { message: "Sample code is a permanent identifier and cannot be changed" });
+  if (typeof input.expectedUpdatedAt !== "string" || (input.title !== undefined && typeof input.title !== "string") || (input.location !== undefined && typeof input.location !== "string") || (input.pinned !== undefined && typeof input.pinned !== "boolean")) throw new HTTPException(400, { message: "Invalid sample update" });
+  if (input.title !== undefined && (!input.title.trim() || input.title.length > 200)) throw new HTTPException(400, { message: "Short title is required and must be 200 characters or fewer" });
   if (input.location && input.location.length > 500) throw new HTTPException(400, { message: "Location is too long" });
   if (input.status !== undefined && !allowedStatuses.includes(input.status)) {
     throw new HTTPException(400, { message: "Invalid sample status" });
   }
   const current = await c.env.DB.prepare(
-    "SELECT status, location, pinned, updated_at FROM samples WHERE id = ?",
-  ).bind(id).first<{ status: SampleStatus; location: string | null; pinned: number; updated_at: string }>();
+    "SELECT title, status, location, pinned, updated_at FROM samples WHERE id = ?",
+  ).bind(id).first<{ title: string; status: SampleStatus; location: string | null; pinned: number; updated_at: string }>();
   if (!current) throw new HTTPException(404, { message: "Sample not found" });
   if (current.updated_at !== input.expectedUpdatedAt) {
     throw new HTTPException(409, { message: "This sample changed elsewhere. Reload it before saving." });
   }
 
+  const nextTitle = input.title === undefined ? current.title : input.title.trim();
   const nextStatus = input.status ?? current.status;
   const nextLocation = input.location === undefined ? current.location : input.location.trim() || null;
   const nextPinned = input.pinned === undefined ? Boolean(current.pinned) : input.pinned;
-  const changed = nextLocation !== current.location || nextStatus !== current.status || nextPinned !== Boolean(current.pinned);
+  const changed = nextTitle !== current.title || nextLocation !== current.location || nextStatus !== current.status || nextPinned !== Boolean(current.pinned);
   if (!changed) return c.json({ ok: true, updatedAt: current.updated_at });
 
   const now = new Date().toISOString();
   const result = await c.env.DB.prepare(
-    `UPDATE samples SET status = ?, location = ?, pinned = ?, updated_by = ?, updated_at = ?
+    `UPDATE samples SET title = ?, status = ?, location = ?, pinned = ?, updated_by = ?, updated_at = ?
      WHERE id = ? AND updated_at = ?`,
-  ).bind(nextStatus, nextLocation, nextPinned ? 1 : 0, c.get("userEmail"), now, id, input.expectedUpdatedAt).run();
+  ).bind(nextTitle, nextStatus, nextLocation, nextPinned ? 1 : 0, c.get("userEmail"), now, id, input.expectedUpdatedAt).run();
   if (!result.meta.changes) {
     throw new HTTPException(409, { message: "This sample changed elsewhere. Reload it before saving." });
   }

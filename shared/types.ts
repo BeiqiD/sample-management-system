@@ -185,6 +185,7 @@ export interface CreateSampleInput {
 }
 
 export interface UpdateSampleInput {
+  title?: string;
   status?: SampleStatus;
   location?: string;
   pinned?: boolean;
