@@ -326,26 +326,68 @@ export function MultiSampleRunGrid({ columns, primaryRun, onSaved, readOnly = fa
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [scrollState, setScrollState] = useState({ overflow: false, left: false, right: false });
+  const [showStickyNames, setShowStickyNames] = useState(false);
+  const card = useRef<HTMLElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const fullHeader = useRef<HTMLDivElement>(null);
+  const stickySampleTrack = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const currentNode = scroller.current;
-    if (!currentNode) return;
+    const currentCard = card.current;
+    const currentHeader = fullHeader.current;
+    if (!currentNode || !currentCard || !currentHeader) return;
     const node: HTMLDivElement = currentNode;
+    const cardNode: HTMLElement = currentCard;
+    const headerNode: HTMLDivElement = currentHeader;
     function syncScrollState() {
       const overflow = node.scrollWidth > node.clientWidth + 1;
-      setScrollState({
+      const next = {
         overflow,
         left: overflow && node.scrollLeft > 1,
         right: overflow && node.scrollLeft + node.clientWidth < node.scrollWidth - 1,
+      };
+      setScrollState((current) => current.overflow === next.overflow && current.left === next.left && current.right === next.right ? current : next);
+      stickySampleTrack.current?.style.setProperty("transform", `translate3d(${-node.scrollLeft}px, 0, 0)`);
+    }
+    function syncLayout() {
+      const recipeHeader = node.querySelector<HTMLElement>(".run-grid-header.recipe-column");
+      const sampleHeader = node.querySelector<HTMLElement>(".sample-column-header");
+      const topbar = document.querySelector<HTMLElement>(".topbar");
+      if (recipeHeader) cardNode.style.setProperty("--sticky-recipe-width", `${recipeHeader.getBoundingClientRect().width}px`);
+      if (sampleHeader) cardNode.style.setProperty("--sticky-sample-width", `${sampleHeader.getBoundingClientRect().width}px`);
+      cardNode.style.setProperty("--run-grid-sticky-top", `${Math.ceil(topbar?.getBoundingClientRect().bottom || 0)}px`);
+      syncScrollState();
+    }
+    function syncStickyNames() {
+      const topbar = document.querySelector<HTMLElement>(".topbar");
+      const stickyTop = Math.ceil(topbar?.getBoundingClientRect().bottom || 0);
+      const headerBottom = headerNode.getBoundingClientRect().bottom;
+      const cardBottom = cardNode.getBoundingClientRect().bottom;
+      const next = headerBottom <= stickyTop + 36 && cardBottom > stickyTop + 36;
+      setShowStickyNames((current) => current === next ? current : next);
+      cardNode.style.setProperty("--run-grid-sticky-top", `${stickyTop}px`);
+    }
+    let animationFrame = 0;
+    function scheduleStickySync() {
+      if (animationFrame) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = 0;
+        syncStickyNames();
       });
     }
-    syncScrollState();
+    syncLayout();
+    syncStickyNames();
     node.addEventListener("scroll", syncScrollState, { passive: true });
-    window.addEventListener("resize", syncScrollState);
+    window.addEventListener("scroll", scheduleStickySync, { passive: true });
+    window.addEventListener("resize", syncLayout);
+    window.addEventListener("resize", scheduleStickySync);
     return () => {
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
       node.removeEventListener("scroll", syncScrollState);
-      window.removeEventListener("resize", syncScrollState);
+      window.removeEventListener("scroll", scheduleStickySync);
+      window.removeEventListener("resize", syncLayout);
+      window.removeEventListener("resize", scheduleStickySync);
     };
   }, [columns.length]);
 
@@ -466,20 +508,28 @@ export function MultiSampleRunGrid({ columns, primaryRun, onSaved, readOnly = fa
   }
 
   const layoutClass = `sample-count-${Math.min(columns.length, 4)}`;
-  return <article className={`run-grid-card ${layoutClass}`}>
+  return <article className={`run-grid-card ${layoutClass}`} ref={card}>
     <div className="run-grid-toolbar">
       <div><p className="eyebrow">{primaryRun.templateType} · run {primaryRun.sequenceNo} · plan r{primaryRun.planRevisionNumber}</p><h2>{primaryRun.templateName} v{primaryRun.templateVersion}</h2><small>{primaryRun.status === "active" ? "Plan on the left; actual execution stays in each sample column." : `${primaryRun.status} run · preserved in the sample chain`}</small></div>
       <div className="grid-scroll-buttons" aria-label="Sample columns">{scrollState.overflow && <button type="button" disabled={!scrollState.left} onClick={() => scrollColumns(-1)} aria-label="Scroll sample columns left">←</button>}<span>{columns.length} sample{columns.length === 1 ? "" : "s"}</span>{scrollState.overflow && <button type="button" disabled={!scrollState.right} onClick={() => scrollColumns(1)} aria-label="Scroll sample columns right">→</button>}</div>
     </div>
     {error && <p className="error-banner grid-error">{error}</p>}
+    <div className={`run-grid-sticky-names${showStickyNames ? " visible" : ""}`} aria-hidden="true">
+      <div className="sticky-recipe-name">Recipe</div>
+      <div className="sticky-sample-viewport">
+        <div className="sticky-sample-track" ref={stickySampleTrack}>
+          {columns.map((column) => <div className="sticky-sample-name" key={`sticky:${column.sample.id}`} title={`${column.sample.title} · ${column.sample.code}`}>{column.sample.title}</div>)}
+        </div>
+      </div>
+    </div>
     <div className="run-grid-scroll" ref={scroller}>
       <div className="run-grid" style={{ "--sample-columns": columns.length } as React.CSSProperties}>
-        <div className="run-grid-header recipe-column">
+        <div className="run-grid-header recipe-column" ref={fullHeader}>
           <strong>Recipe step</strong>
           <small>Common actions use checked samples</small>
         </div>
         {columns.map((column) => <div className="run-grid-header sample-column-header" key={column.sample.id}>
-          <label><input type="checkbox" checked={selected.has(column.sample.id)} disabled={!column.run || readOnly} onChange={() => toggleColumn(column.sample.id)} /><span><strong>{column.sample.code}</strong><small>{column.sample.title}</small></span></label>
+          <label><input type="checkbox" checked={selected.has(column.sample.id)} disabled={!column.run || readOnly} onChange={() => toggleColumn(column.sample.id)} /><span><strong>{column.sample.title}</strong><small>{column.sample.code}</small></span></label>
           {!column.run && <em>No matching run</em>}
         </div>)}
 

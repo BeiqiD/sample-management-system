@@ -31,7 +31,7 @@ export function NewSamplePage() {
     <p className="eyebrow">Samples</p><h1>New sample</h1>
     <form className="card form-grid" onSubmit={submit}>
       <label>Sample code<input name="code" required placeholder="e.g. SOD-2026-014" /></label>
-      <label>Short title<input name="title" required placeholder="What is this sample?" /></label>
+      <label>Sample name<input name="title" required placeholder="What is this sample?" /></label>
       <label>Status<select name="status" defaultValue={DEFAULT_SAMPLE_STATUS}>{SAMPLE_CREATION_STATUSES.map((status) => <option value={status} key={status}>{SAMPLE_STATUS_LABELS[status]}</option>)}</select></label>
       <label>Current location<input name="location" placeholder="Box, lab, or tool" /></label>
       <label>Description<textarea name="description" rows={5} placeholder="Optional starting context" /></label>

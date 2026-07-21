@@ -55,7 +55,7 @@ export function SplitSampleDialog({ sample, onCancel, onComplete }: {
   async function confirmSplit() {
     const invalidIndex = pieces.findIndex((piece) => !piece.code.trim() || !piece.title.trim() || !piece.location.trim());
     if (invalidIndex >= 0) {
-      setError(`Piece ${invalidIndex + 1} needs a code, short title, and location.`);
+      setError(`Piece ${invalidIndex + 1} needs a code, sample name, and location.`);
       return;
     }
     const normalizedCodes = pieces.map((piece) => piece.code.trim().toLocaleLowerCase());
@@ -108,7 +108,7 @@ export function SplitSampleDialog({ sample, onCancel, onComplete }: {
             <summary><span>Piece {index + 1}</span><strong>{piece.code || "Code required"}</strong><small>{piece.status} · {piece.location || "Location required"}</small></summary>
             <div className="split-piece-fields">
               <label>Sample code<input value={piece.code} required maxLength={100} onChange={(event) => updatePiece(index, "code", event.target.value)} /></label>
-              <label>Short title<input value={piece.title} required maxLength={200} onChange={(event) => updatePiece(index, "title", event.target.value)} /></label>
+              <label>Sample name<input value={piece.title} required maxLength={200} onChange={(event) => updatePiece(index, "title", event.target.value)} /></label>
               <label>Status<select value={piece.status} onChange={(event) => updatePiece(index, "status", event.target.value as SampleStatus)}>{SAMPLE_CREATION_STATUSES.map((status) => <option value={status} key={status}>{SAMPLE_STATUS_LABELS[status]}</option>)}</select></label>
               <label>Location<input value={piece.location} required maxLength={500} onChange={(event) => updatePiece(index, "location", event.target.value)} /></label>
               <label className="split-piece-description">Description<textarea rows={3} value={piece.description || ""} maxLength={10_000} onChange={(event) => updatePiece(index, "description", event.target.value)} /></label>

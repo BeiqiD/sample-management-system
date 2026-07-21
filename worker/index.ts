@@ -144,7 +144,7 @@ app.post("/samples", async (c) => {
   }
   const code = input.code.trim();
   const title = input.title.trim();
-  if (!code || !title) throw new HTTPException(400, { message: "Code and title are required" });
+  if (!code || !title) throw new HTTPException(400, { message: "Code and sample name are required" });
   if (code.length > 100 || title.length > 200 || (input.description?.length ?? 0) > 10_000 || (input.location?.length ?? 0) > 500) {
     throw new HTTPException(400, { message: "One or more sample fields are too long" });
   }
@@ -194,7 +194,7 @@ app.post("/samples/:id/split", async (c) => {
       status: piece.status,
     };
     if (!normalized.code || !normalized.title || !normalized.location) {
-      throw new HTTPException(400, { message: "Every split piece needs a code, short title, and location" });
+      throw new HTTPException(400, { message: "Every split piece needs a code, sample name, and location" });
     }
     if (normalized.code.length > 100 || normalized.title.length > 200 || (normalized.description?.length ?? 0) > 10_000 || normalized.location.length > 500) {
       throw new HTTPException(400, { message: "One or more split-piece fields are too long" });
@@ -458,7 +458,7 @@ app.patch("/samples/:id", async (c) => {
   const input = await c.req.json<UpdateSampleInput>();
   if ("code" in input) throw new HTTPException(400, { message: "Sample code is a permanent identifier and cannot be changed" });
   if (typeof input.expectedUpdatedAt !== "string" || (input.title !== undefined && typeof input.title !== "string") || (input.location !== undefined && typeof input.location !== "string") || (input.pinned !== undefined && typeof input.pinned !== "boolean")) throw new HTTPException(400, { message: "Invalid sample update" });
-  if (input.title !== undefined && (!input.title.trim() || input.title.length > 200)) throw new HTTPException(400, { message: "Short title is required and must be 200 characters or fewer" });
+  if (input.title !== undefined && (!input.title.trim() || input.title.length > 200)) throw new HTTPException(400, { message: "Sample name is required and must be 200 characters or fewer" });
   if (input.location && input.location.length > 500) throw new HTTPException(400, { message: "Location is too long" });
   if (input.status !== undefined && !isSampleStatus(input.status)) {
     throw new HTTPException(400, { message: "Invalid sample status" });

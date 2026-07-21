@@ -73,7 +73,7 @@ export function ProcessingPage() {
       <div className="segmented-control" aria-label="Filter processing runs">
         {filters.map(({ value, label }) => <button type="button" className={filter === value ? "selected" : ""} aria-pressed={filter === value} key={value} onClick={() => selectFilter(value)}>{label}<span>{counts[value]}</span></button>)}
       </div>
-      <label className="search-box compact-search"><span>Search</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Code, title, workflow, or location" /></label>
+      <label className="search-box compact-search"><span>Search</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Code, name, workflow, or location" /></label>
     </div>
     {error && <p className="error-banner">{error}</p>}
     {loading ? <p className="muted">Loading…</p> : visibleSamples.length ? <div className="processing-list">
@@ -84,7 +84,7 @@ export function ProcessingPage() {
         <div className="processing-row-side"><span className={`run-status run-status-${sample.latestRunStatus || "ready"}`}>{runStatusLabel(sample.latestRunStatus)}</span><time>{new Date(sample.updatedAt).toLocaleDateString()}</time></div>
       </Link>)}
     </div> : <EmptyState title={query ? "No matching workflows" : filter === "active" ? "No active processing" : `No ${filter} workflows`}>
-      {query ? "Try another code, title, workflow, or location." : filter === "active" ? "Active samples without a workflow will also appear here, ready to start." : "Choose another status to inspect other runs."}
+      {query ? "Try another code, name, workflow, or location." : filter === "active" ? "Active samples without a workflow will also appear here, ready to start." : "Choose another status to inspect other runs."}
     </EmptyState>}
   </div>;
 }

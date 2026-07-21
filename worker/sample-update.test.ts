@@ -8,7 +8,7 @@ describe("sample update audit", () => {
 
   it("records only the title field handled outside database triggers", () => {
     expect(titleChangeAudit("Etch test", "Etch calibration")).toEqual({
-      body: "Title changed from Etch test to Etch calibration",
+      body: "Sample name changed from Etch test to Etch calibration",
       metadata: {
         action: "sample_details_updated",
         changes: { title: { from: "Etch test", to: "Etch calibration" } },
@@ -17,6 +17,6 @@ describe("sample update audit", () => {
   });
 
   it("preserves punctuation and Unicode in the audit text", () => {
-    expect(titleChangeAudit("片 A", "片 A · diced")?.body).toBe("Title changed from 片 A to 片 A · diced");
+    expect(titleChangeAudit("片 A", "片 A · diced")?.body).toBe("Sample name changed from 片 A to 片 A · diced");
   });
 });
