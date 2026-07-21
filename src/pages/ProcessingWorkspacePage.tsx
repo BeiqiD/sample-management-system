@@ -120,10 +120,10 @@ export function ProcessingWorkspacePage() {
         <button className="button primary" disabled={samples.length >= MAX_VISIBLE_SAMPLES || !selectedIsActive} onClick={() => setShowSamplePicker((value) => !value)}>+ Add sample</button>
       </div>
       <div className="visible-samples">
-        {samples.map((item, index) => <div className="visible-sample" key={item.id}><span>{item.code}</span><small>{item.title}</small>{index > 0 && <button type="button" aria-label={`Remove ${item.code} from view`} onClick={() => removeVisibleSample(item.id)}>×</button>}</div>)}
+        {samples.map((item, index) => <div className="visible-sample" key={item.id}><strong>{item.title}</strong><small>{item.code}</small>{index > 0 && <button type="button" aria-label={`Remove ${item.title} (${item.code}) from view`} onClick={() => removeVisibleSample(item.id)}>×</button>}</div>)}
       </div>
       {showSamplePicker && <div className="card sample-picker-popover">
-        <label>Find another sample<input autoFocus value={sampleQuery} onChange={(event) => setSampleQuery(event.target.value)} placeholder="Code, title, or location" /></label>
+        <label>Find another sample<input autoFocus value={sampleQuery} onChange={(event) => setSampleQuery(event.target.value)} placeholder="Code, name, or location" /></label>
         <div>{availableResults.length ? availableResults.map((result) => <button type="button" key={result.id} onClick={() => addVisibleSample(result.id)}><strong>{result.code}</strong><span>{result.title}</span><small>{result.location || "No location"}</small></button>) : <p className="muted">No samples to add.</p>}</div>
       </div>}
 
