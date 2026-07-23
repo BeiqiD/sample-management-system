@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
+import { SubstrateStepDetails } from "../components/SubstrateStepDetails";
 import { FileDropzone } from "../components/FileDropzone";
 import { api, type TemplateDetail, type TemplateStepRecord } from "../lib/api";
 import { compressLayerStackImage } from "../lib/images";
@@ -141,7 +142,7 @@ export function TemplatePage() {
     {template.locked && <p className="info-banner">This version was first used on {template.lockedAt ? new Date(template.lockedAt).toLocaleString() : "an earlier run"} and is now immutable. Clone it to make changes.</p>}
     {editable && <section className="card template-metadata-editor"><h2>Editable version details</h2><div className="step-field-row"><label>Name<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>Version<input type="number" min="1" step="1" value={version} onChange={(event) => setVersion(Number(event.target.value))} /></label></div><button className="button primary" disabled={saving} onClick={() => void saveMetadata()}>{saving ? "Saving…" : "Save version details"}</button></section>}
     {error && <p className="error-banner">{error}</p>}
-    <section className="card template-initial-state"><div><p className="eyebrow">Initial substrate structure</p><h2>{template.initialStateHash ? "Defined by this version" : "No starting diagram"}</h2><p className="muted">A new process run can use this structure, or explicitly continue from the sample’s current structure.</p></div>{template.initialStateImageKeys.length > 0 && <div className="diagram-gallery">{template.initialStateImageKeys.map((key) => <a href={`/api/assets/${key}`} target="_blank" rel="noreferrer" key={key}><img src={`/api/assets/${key}`} alt="Initial substrate structure" /></a>)}</div>}</section>
+    <section className="card template-initial-state"><div><p className="eyebrow">Initial substrate · Step 0</p><h2>{template.initialSubstrateStep ? "Substrate Stack" : template.initialStateHash ? "Legacy substrate definition" : "Substrate Stack missing"}</h2>{template.initialSubstrateStep ? <SubstrateStepDetails step={template.initialSubstrateStep} /> : <p className="muted">{template.initialStateHash ? "This older version has a stored structure but no Step 0 metadata." : "Re-import this version with Step 0 named Substrate Stack before using it for a run transition."}</p>}</div><div className="diagram-gallery">{template.initialStateImageKeys.length ? template.initialStateImageKeys.map((key) => <a href={`/api/assets/${key}`} target="_blank" rel="noreferrer" key={key}><img src={`/api/assets/${key}`} alt="Step 0 Substrate Stack" /></a>) : <div className="layer-placeholder">{template.initialSubstrateStep ? "Step 0 has no diagram" : "No initial structure"}</div>}</div></section>
     <section className="template-steps-section"><div className="section-heading"><h2>Complete process template</h2><span>{template.steps.length} steps</span></div>{template.steps.map((step) => <TemplateStepEditor key={step.id} template={template} step={step} onSaved={load} />)}{editable && <NewTemplateStep templateId={template.id} onSaved={load} />}</section>
   </div>;
 }

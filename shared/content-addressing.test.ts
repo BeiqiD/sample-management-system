@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hashRecipeManifest, hashStateRepresentation, hashStepDefinition, logicalStepKey } from "./content-addressing";
+import { hashInitialSubstrateRepresentation, hashRecipeManifest, hashStateRepresentation, hashStepDefinition, logicalStepKey } from "./content-addressing";
 
 describe("content-addressed recipe definitions", () => {
   it("normalizes line endings and trailing whitespace", async () => {
@@ -26,5 +26,24 @@ describe("content-addressed recipe definitions", () => {
     expect(logicalStepKey({ name: "Bake" }, 3)).toBe("name:bake:3");
     expect(logicalStepKey({ name: " Clean  Wafer " }, 1)).toBe("name:clean%20wafer:1");
     expect(logicalStepKey({ name: "Clean-Wafer" }, 1)).toBe("name:clean-wafer:1");
+  });
+
+  it("includes Step 0 content and diagrams in an initial substrate snapshot", async () => {
+    const base = {
+      stepNumber: "0",
+      name: "Substrate Stack",
+      parametersText: "Si / 2 µm BOX",
+      commentsText: "Starting wafer",
+      rawCells: { Material: "Si", Thickness: "220 nm" },
+    };
+    const first = await hashInitialSubstrateRepresentation(base, ["diagram"]);
+    const reordered = await hashInitialSubstrateRepresentation({
+      ...base,
+      rawCells: { Thickness: "220 nm", Material: "Si" },
+    }, ["diagram"]);
+    const changed = await hashInitialSubstrateRepresentation({ ...base, parametersText: "InP" }, ["diagram"]);
+    expect(first.hash).toBe(reordered.hash);
+    expect(first.hash).not.toBe(changed.hash);
+    expect(first.canonical.type).toBe("substrate");
   });
 });

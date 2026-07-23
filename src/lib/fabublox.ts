@@ -24,6 +24,10 @@ function normalizeHeader(value: unknown) {
   return String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+function normalizedStepLabel(value: string | null) {
+  return normalizeHeader(value).replace(/[-_]+/g, " ");
+}
+
 function findHeader(rows: unknown[][]) {
   let best = { row: -1, columns: {} as ColumnMap, score: 0 };
   rows.slice(0, 20).forEach((row, rowIndex) => {
@@ -307,13 +311,42 @@ export async function parseFabuBloxWorkbook(file: File): Promise<FabubloxImportP
       step.imageIds.push(image.localId);
     }
   }
-  const firstStepRow = Math.min(...parsedRows.steps.map((step) => step.sourceRow));
-  const initialStateImageIds = images.filter((image) =>
-    !image.assignedStepLocalId
-    && layerColumn !== null
-    && image.anchor.col === layerColumn
-    && image.anchor.row + 1 < firstStepRow
-  ).map((image) => image.localId);
+  const substrateCandidates = parsedRows.steps.filter((step) =>
+    step.stepNumber === "0" && normalizedStepLabel(step.name) === "substrate stack");
+  const initialSubstrateSource = substrateCandidates.length === 1 ? substrateCandidates[0] : null;
+  const initialStateImageIds = initialSubstrateSource?.imageIds.filter((id) => {
+    const image = images.find((candidate) => candidate.localId === id);
+    return image && layerColumn !== null && image.anchor.col === layerColumn;
+  }) ?? [];
+  const initialSubstrateStep = initialSubstrateSource
+    ? { ...initialSubstrateSource, imageIds: initialStateImageIds }
+    : null;
+  if (!initialSubstrateSource) {
+    warnings.push({
+      code: substrateCandidates.length > 1 ? "ambiguous_initial_substrate_step" : "missing_initial_substrate_step",
+      message: substrateCandidates.length > 1
+        ? "More than one Step 0 named Substrate Stack was found; the initial substrate was not inferred."
+        : "Step 0 named Substrate Stack was not found; no initial substrate will be defined.",
+    });
+  } else {
+    if (parsedRows.steps[0]?.localId !== initialSubstrateSource.localId) {
+      warnings.push({
+        code: "misplaced_initial_substrate_step",
+        message: "Step 0: Substrate Stack is not the first process row; it was imported as the initial substrate and removed from executable steps.",
+        sourceRow: initialSubstrateSource.sourceRow,
+      });
+    }
+    if (!initialStateImageIds.length) {
+      warnings.push({
+        code: "initial_substrate_missing_diagram",
+        message: "Step 0: Substrate Stack was detected, but no diagram was found on its row.",
+        sourceRow: initialSubstrateSource.sourceRow,
+      });
+    }
+  }
+  const executableSteps = parsedRows.steps
+    .filter((step) => step.localId !== initialSubstrateSource?.localId)
+    .map((step, position) => ({ ...step, position }));
   const initialStateImageSet = new Set(initialStateImageIds);
   const unassignedImageIds = images
     .filter((image) => !image.assignedStepLocalId && !initialStateImageSet.has(image.localId))
@@ -323,12 +356,13 @@ export async function parseFabuBloxWorkbook(file: File): Promise<FabubloxImportP
   for (const image of images) if (layerColumn !== null && image.anchor.col !== layerColumn) warnings.push({ code: "image_outside_layer_column", message: `${image.localId} is anchored outside the Layer Stacks column`, sourceRow: image.anchor.row + 1 });
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     title: selected.sheetName,
     source: { fileName: file.name, fileSha256: await sha256(buffer), sheetName: selected.sheetName },
     detected: { headerRow: selected.header.row + 1, layerStackColumn: layerColumn },
     sections: parsedRows.sections,
-    steps: parsedRows.steps,
+    initialSubstrateStep,
+    steps: executableSteps,
     images,
     initialStateImageIds,
     unassignedImageIds,

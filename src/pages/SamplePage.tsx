@@ -4,6 +4,7 @@ import { isSampleRecordEvent } from "../../shared/sample-records";
 import { SAMPLE_STATUSES, SAMPLE_STATUS_LABELS, type SampleDetail, type SampleEvent, type SampleRun, type SampleStatus } from "../../shared/types";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { FileDropzone } from "../components/FileDropzone";
+import { SampleStateThumbnail } from "../components/SampleStateThumbnail";
 import { SplitSampleDialog } from "../components/SplitSampleDialog";
 import { StatusPill } from "../components/StatusPill";
 import { api } from "../lib/api";
@@ -22,6 +23,27 @@ function runStatusLabel(status: SampleRun["status"]) {
   if (status === "cancelled") return "Cancelled";
   if (status === "superseded") return "Superseded";
   return "Active";
+}
+
+function runStructureFrames(run: SampleRun) {
+  const frames: Array<{ key: string; label: string; imageKeys: string[]; stateHash: string | null }> = [];
+  if (run.initialStateImageKeys.length) {
+    frames.push({ key: `${run.id}:initial`, label: "Initial substrate", imageKeys: run.initialStateImageKeys, stateHash: run.initialStateHash });
+  }
+  for (const step of run.steps) {
+    if (step.status !== "done" || !step.actualizedAt) continue;
+    const imageKeys = step.executionImageKeys.length ? step.executionImageKeys : step.plannedImageKeys;
+    if (!imageKeys.length) continue;
+    const previous = frames[frames.length - 1];
+    if (step.expectedStateHash && previous?.stateHash === step.expectedStateHash && !step.executionImageKeys.length) continue;
+    frames.push({ key: step.id, label: step.title, imageKeys, stateHash: step.expectedStateHash });
+  }
+  if (frames.length === 1 && frames[0].key.endsWith(":initial")) {
+    frames[0].label = run.status === "active" ? "Initial / latest recorded structure" : "Initial / final structure";
+  } else if (frames.length) {
+    frames[frames.length - 1].label = run.status === "active" ? "Latest recorded structure" : "Final structure";
+  }
+  return frames;
 }
 
 export function SamplePage() {
@@ -162,7 +184,7 @@ export function SamplePage() {
     <Link className="back-link" to="/samples">← Samples</Link>
     <div className="sample-header">
       <div className="sample-header-copy"><p className="eyebrow">{sample.code}</p><h1>{sample.title}</h1><p className="lead">{sample.description || "No description"}</p></div>
-      <div className="header-actions"><StatusPill status={sample.status} /><Link className="button primary" to={`/processing/${sample.id}${activeRun ? `?run=${encodeURIComponent(activeRun.id)}` : ""}`}>Open processing</Link><a className="button" href="#sample-record">Add record</a><button className="button" onClick={() => setSplitting(true)}>Split sample</button><button className="button" disabled={exporting} onClick={() => {
+      <div className="header-actions"><StatusPill status={sample.status} /><Link className="button primary" to={`/processing/${sample.id}${activeRun ? `?run=${encodeURIComponent(activeRun.id)}` : "?action=start"}`}>{activeRun ? "Continue processing" : sample.runs.length ? "Start new run" : "Start first run"}</Link><a className="button" href="#sample-record">Add record</a><button className="button" onClick={() => setSplitting(true)}>Split sample</button><button className="button" disabled={exporting} onClick={() => {
         setExporting(true);
         void exportSample(sample).catch((error: Error) => setError(error.message)).finally(() => setExporting(false));
       }}>{exporting ? "Exporting…" : "Export ZIP"}</button></div>
@@ -184,15 +206,28 @@ export function SamplePage() {
       </aside>
 
       <section className="sample-runs-section">
+        <article className="card sample-current-structure">
+          <div><p className="eyebrow">Current structure</p><h2>{sample.currentStateStepTitle ? `After ${sample.currentStateStepTitle}` : sample.latestWorkflowName ? "Latest recorded substrate" : "No process structure yet"}</h2><p>{sample.latestWorkflowName ? `${sample.latestWorkflowName}${sample.latestWorkflowVersion ? ` · v${sample.latestWorkflowVersion}` : ""}` : "Start a process run to establish the first substrate snapshot."}</p></div>
+          <SampleStateThumbnail sample={sample} />
+        </article>
         <div className="section-heading"><div><p className="eyebrow">Processing history</p><h2>Runs</h2></div><span>{sample.runs.length}</span></div>
         {sample.runs.length ? <div className="sample-run-list">{sample.runs.map((run) => {
           const progress = runProgress(run);
-          return <article className="card sample-run-summary" key={run.id}>
-            <div><span className={`run-status run-status-${run.status}`}>{runStatusLabel(run.status)}</span><p className="sample-run-name"><strong>{run.templateName}</strong> · v{run.templateVersion}</p><small>Process run {run.sequenceNo} · plan revision {run.planRevisionNumber} · {run.initialStateHash ? "initial substrate recorded" : "no initial diagram"}</small></div>
-            <div className="sample-run-progress"><strong>{progress.completed} / {progress.total}</strong><span>steps complete</span></div>
-            <time>{new Date(run.completedAt || run.createdAt).toLocaleString()}</time>
-            <Link className="button" to={`/processing/${sample.id}?run=${encodeURIComponent(run.id)}`}>{run.status === "active" ? "Continue" : "View run"}</Link>
-          </article>;
+          const frames = runStructureFrames(run);
+          return <details className="card sample-run-card" key={run.id}>
+            <summary className="sample-run-summary">
+              <div><span className={`run-status run-status-${run.status}`}>{runStatusLabel(run.status)}</span><p className="sample-run-name"><strong>Run {run.sequenceNo} · {run.templateName}</strong> · v{run.templateVersion}</p><small>Plan revision {run.planRevisionNumber} · {run.initialStateHash ? "initial substrate recorded" : "initial substrate unavailable"}</small></div>
+              <div className="sample-run-progress"><strong>{progress.completed} / {progress.total}</strong><span>steps complete</span></div>
+              <time>{new Date(run.completedAt || run.createdAt).toLocaleString()}</time>
+              <Link className="button" onClick={(event) => event.stopPropagation()} to={`/processing/${sample.id}?run=${encodeURIComponent(run.id)}`}>{run.status === "active" ? "Continue" : "View run"}</Link>
+            </summary>
+            <div className="run-structure-history">
+              {frames.length ? frames.map((frame, index) => <div className="run-structure-frame" key={frame.key}>
+                {index > 0 && <span className="run-structure-arrow" aria-hidden="true">→</span>}
+                <div><small>{frame.label}</small><div>{frame.imageKeys.map((key) => <a href={`/api/assets/${key}`} target="_blank" rel="noreferrer" key={key}><img src={`/api/assets/${key}`} alt={`${frame.label} for run ${run.sequenceNo}`} /></a>)}</div></div>
+              </div>) : <p className="muted">This run has no recorded structure diagrams.</p>}
+            </div>
+          </details>;
         })}</div> : <div className="card empty-run-message"><h2>No process runs</h2><p>Open Processing to choose a process template and start the first run.</p></div>}
       </section>
     </div>

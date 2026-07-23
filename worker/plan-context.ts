@@ -8,6 +8,7 @@ type PlanContext = {
     current_plan_revision_id: string;
     revision_no: number;
     current_template_version_id: string;
+    current_template_version_number: number;
   };
   nextTemplate: {
     id: string;
@@ -15,6 +16,8 @@ type PlanContext = {
     name: string;
     template_type: string;
     version: number;
+    initial_state_hash: string | null;
+    content_json: string | null;
   };
   existing: Array<{
     id: string;
@@ -39,12 +42,15 @@ export async function loadPlanContext(db: D1Database, sampleId: string, runId: s
   const [run, nextTemplate, existingRows, nextRows] = await Promise.all([
     db.prepare(
       `SELECT r.id, r.status, r.recipe_family_id, r.current_plan_revision_id,
-              rpr.revision_no, rpr.template_version_id AS current_template_version_id
-       FROM runs r JOIN run_plan_revisions rpr ON rpr.id = r.current_plan_revision_id
+              rpr.revision_no, rpr.template_version_id AS current_template_version_id,
+              current_tv.version AS current_template_version_number
+       FROM runs r
+       JOIN run_plan_revisions rpr ON rpr.id = r.current_plan_revision_id
+       JOIN template_versions current_tv ON current_tv.id = rpr.template_version_id
        WHERE r.id = ? AND r.sample_id = ?`,
     ).bind(runId, sampleId).first<PlanContext["run"]>(),
     db.prepare(
-      `SELECT id, recipe_family_id, name, template_type, version FROM template_versions
+      `SELECT id, recipe_family_id, name, template_type, version, initial_state_hash, content_json FROM template_versions
        WHERE id = ? AND archived_at IS NULL`,
     ).bind(templateVersionId).first<PlanContext["nextTemplate"]>(),
     db.prepare(

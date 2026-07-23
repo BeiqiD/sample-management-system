@@ -1,5 +1,6 @@
 export const STEP_HASH_SCHEME = "step-definition/v1";
 export const STATE_HASH_SCHEME = "state-diagram/v1";
+export const SUBSTRATE_STATE_HASH_SCHEME = "substrate-state/v1";
 const MANIFEST_HASH_SCHEME = "recipe-manifest/v1";
 
 function normalizedText(value: string | null | undefined) {
@@ -51,6 +52,22 @@ export async function hashStepDefinition(source: StepDefinitionSource) {
 
 export async function hashStateRepresentation(assetHashes: string[]) {
   const canonical = { schema: STATE_HASH_SCHEME, type: "diagram", assetHashes: [...assetHashes] };
+  return { hash: await sha256Hex(stableJson(canonical)), canonical };
+}
+
+export async function hashInitialSubstrateRepresentation(source: StepDefinitionSource & {
+  stepNumber?: string | null;
+  rawCells?: Record<string, unknown>;
+}, assetHashes: string[]) {
+  const definition = canonicalStepDefinition(source);
+  const canonical = {
+    ...definition,
+    schema: SUBSTRATE_STATE_HASH_SCHEME,
+    type: "substrate",
+    stepNumber: normalizedText(source.stepNumber),
+    rawCells: stableValue(source.rawCells ?? {}),
+    assetHashes: [...assetHashes],
+  };
   return { hash: await sha256Hex(stableJson(canonical)), canonical };
 }
 

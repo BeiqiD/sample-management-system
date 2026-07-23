@@ -8,11 +8,19 @@ import { api, type TemplateRecord } from "../lib/api";
 
 const MAX_VISIBLE_SAMPLES = 8;
 
+function processRunStatus(status: ProcessingSampleDetail["runs"][number]["status"]) {
+  if (status === "complete") return "Completed";
+  if (status === "cancelled") return "Cancelled";
+  if (status === "superseded") return "Superseded";
+  return "Active";
+}
+
 export function ProcessingWorkspacePage() {
   const { sampleId = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const additionalKey = searchParams.get("with") || "";
   const requestedRunId = searchParams.get("run") || "";
+  const requestedAction = searchParams.get("action") || "";
   const additionalIds = additionalKey.split(",").map((id) => id.trim()).filter((id, index, ids) => id && id !== sampleId && ids.indexOf(id) === index).slice(0, MAX_VISIBLE_SAMPLES - 1);
   const [samples, setSamples] = useState<ProcessingSampleDetail[]>([]);
   const sample = samples.find((item) => item.id === sampleId) || null;
@@ -23,6 +31,7 @@ export function ProcessingWorkspacePage() {
   const [planPreview, setPlanPreview] = useState<PlanUpdatePreview | null>(null);
   const [runStartPreview, setRunStartPreview] = useState<RunStartPreview | null>(null);
   const [runStartError, setRunStartError] = useState("");
+  const [transitionMode, setTransitionMode] = useState<"start" | "update" | "reopen" | null>(null);
   const [showSamplePicker, setShowSamplePicker] = useState(false);
   const [sampleQuery, setSampleQuery] = useState("");
   const [sampleResults, setSampleResults] = useState<SampleSummary[]>([]);
@@ -43,10 +52,23 @@ export function ProcessingWorkspacePage() {
   const selectedRun = sample?.runs.find((run) => run.id === requestedRunId) ?? activeRun ?? sample?.runs[0] ?? null;
 
   useEffect(() => {
+    if (!sample || requestedAction !== "start" || activeRun || transitionMode) return;
+    setTransitionMode("start");
+    setTemplateVersionId("");
     setPlanPreview(null);
-    if (!sample || !activeRun || selectedRun?.id !== activeRun.id || !templateVersionId) return;
-    api.previewPlanUpdate(sample.id, activeRun.id, templateVersionId).then(setPlanPreview).catch((error: Error) => setError(error.message));
-  }, [sample, activeRun, selectedRun, templateVersionId]);
+    setRunStartPreview(null);
+    const next = new URLSearchParams(searchParams);
+    next.delete("action");
+    setSearchParams(next, { replace: true });
+  }, [sample, requestedAction, activeRun, transitionMode, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    setPlanPreview(null);
+    setRunStartError("");
+    const targetRun = transitionMode === "update" ? activeRun : transitionMode === "reopen" ? selectedRun : null;
+    if (!sample || !targetRun || !templateVersionId) return;
+    api.previewPlanUpdate(sample.id, targetRun.id, templateVersionId).then(setPlanPreview).catch((error: Error) => setRunStartError(error.message));
+  }, [sample, activeRun, selectedRun, templateVersionId, transitionMode]);
 
   useEffect(() => {
     if (!showSamplePicker) return;
@@ -83,31 +105,39 @@ export function ProcessingWorkspacePage() {
     setAssigning(true); setError("");
     try {
       const preview = await api.previewRunStart(sampleId, templateVersionId);
-      if (preview.successor || preview.sampleCurrentState.hash) {
-        setRunStartPreview(preview);
-        setRunStartError("");
-        return;
-      }
-      const result = await api.startProcessRun(sampleId, { templateVersionId });
-      setTemplateVersionId("");
-      updateSearchParams({ run: result.id });
-      await load();
-    } catch (error) { setError((error as Error).message); }
+      setRunStartPreview(preview);
+      setRunStartError("");
+    } catch (error) { setRunStartError((error as Error).message); }
     finally { setAssigning(false); }
   }
 
-  async function confirmProcessRun(initialStateHash: string | null) {
-    if (!templateVersionId || !runStartPreview) return;
+  async function confirmProcessTransition() {
+    if (!templateVersionId || !runStartPreview || !transitionMode) return;
     setAssigning(true); setRunStartError("");
     try {
-      const result = await api.startProcessRun(sampleId, {
-        templateVersionId,
-        initialStateHash,
+      const substrateConfirmation = {
+        confirmed: true as const,
         expectedSampleUpdatedAt: runStartPreview.sampleUpdatedAt,
-      });
+        expectedPreviousStateHash: runStartPreview.sampleCurrentState.hash,
+        expectedTemplateInitialStateHash: runStartPreview.template.initialStateHash,
+        expectedLatestRunId: runStartPreview.expectedLatestRunId,
+        ...(transitionMode === "update" || transitionMode === "reopen"
+          ? { expectedCurrentPlanRevisionId: (transitionMode === "update" ? activeRun : selectedRun)?.currentPlanRevisionId }
+          : {}),
+      };
+      if (transitionMode === "start") {
+        const result = await api.startProcessRun(sampleId, { templateVersionId, substrateConfirmation });
+        updateSearchParams({ run: result.id });
+      } else {
+        const targetRun = transitionMode === "update" ? activeRun : selectedRun;
+        if (!targetRun || !planPreview?.compatible) return;
+        await api.applyPlanUpdate(sampleId, targetRun.id, { templateVersionId, substrateConfirmation });
+        updateSearchParams({ run: targetRun.id });
+      }
       setRunStartPreview(null);
+      setTransitionMode(null);
       setTemplateVersionId("");
-      updateSearchParams({ run: result.id });
+      setPlanPreview(null);
       await load();
     } catch (error) { setRunStartError((error as Error).message); }
     finally { setAssigning(false); }
@@ -125,24 +155,24 @@ export function ProcessingWorkspacePage() {
     finally { setAssigning(false); }
   }
 
-  async function updatePlan() {
-    if (!templateVersionId || !activeRun || !planPreview?.compatible) return;
-    setAssigning(true); setError("");
-    try {
-      await api.applyPlanUpdate(sampleId, activeRun.id, templateVersionId);
-      setTemplateVersionId(""); setPlanPreview(null);
-      await load();
-    } catch (error) { setError((error as Error).message); }
-    finally { setAssigning(false); }
+  function openTransition(mode: "start" | "update" | "reopen") {
+    setTransitionMode(mode);
+    setTemplateVersionId("");
+    setPlanPreview(null);
+    setRunStartPreview(null);
+    setRunStartError("");
+    setError("");
   }
 
   if (!sample) return <div className="page"><p>{error || "Loading processing workspace…"}</p></div>;
   const includedIds = new Set(samples.map((item) => item.id));
   const availableResults = sampleResults.filter((result) => !includedIds.has(result.id));
-  const assignableTemplates = activeRun
-    ? templates.filter((template) => template.recipeFamilyId === activeRun.recipeFamilyId && template.id !== activeRun.templateVersionId)
+  const transitionTargetRun = transitionMode === "update" ? activeRun : transitionMode === "reopen" ? selectedRun : null;
+  const assignableTemplates = transitionTargetRun
+    ? templates.filter((template) => template.recipeFamilyId === transitionTargetRun.recipeFamilyId && template.version > transitionTargetRun.templateVersion)
     : templates;
   const selectedIsActive = selectedRun?.status === "active";
+  const selectedIsLatest = selectedRun?.id === sample.runs[0]?.id;
   const unfinishedCurrentSteps = activeRun?.steps.filter((step) =>
     step.planStatus === "current" && step.status !== "done" && step.status !== "skipped") ?? [];
 
@@ -167,12 +197,34 @@ export function ProcessingWorkspacePage() {
         <div>{availableResults.length ? availableResults.map((result) => <button type="button" key={result.id} onClick={() => addVisibleSample(result.id)}><strong>{result.code}</strong><span>{result.title}</span><small>{result.location || "No location"}</small></button>) : <p className="muted">No samples to add.</p>}</div>
       </div>}
 
-      {sample.runs.length > 0 && <div className="run-selector card"><label>Process run<select value={selectedRun?.id || ""} onChange={(event) => updateSearchParams({ run: event.target.value })}>{sample.runs.map((run) => <option key={run.id} value={run.id}>{run.status === "active" ? "Active" : run.status} · {run.templateName} v{run.templateVersion} · run {run.sequenceNo}</option>)}</select></label>{!selectedIsActive && <span>This completed process run is read-only.</span>}</div>}
+      {sample.runs.length > 0 && (sample.runs.length > 1
+        ? <div className="run-selector card"><label>Viewing process run<select value={selectedRun?.id || ""} onChange={(event) => updateSearchParams({ run: event.target.value })}>{sample.runs.map((run) => <option key={run.id} value={run.id}>Run {run.sequenceNo} · {run.templateName} v{run.templateVersion} · {processRunStatus(run.status)}</option>)}</select></label>{!selectedIsActive && <span>{processRunStatus(selectedRun?.status || "complete")} · read-only</span>}</div>
+        : selectedRun && <div className="run-viewing-card card"><div><p className="eyebrow">Process run</p><strong>Run {selectedRun.sequenceNo} · {selectedRun.templateName} v{selectedRun.templateVersion}</strong></div><span className={`run-status run-status-${selectedRun.status}`}>{processRunStatus(selectedRun.status)}</span></div>)}
 
-      {(!activeRun || selectedIsActive) && <div className="card assign-template"><div><strong>{activeRun ? `Update the active process for ${sample.code}` : `Start processing ${sample.code}`}</strong><small>{activeRun ? `Choose another version of ${activeRun.templateName} to update only unfinished work. Completed history remains frozen.` : sample.runs.length ? "Starts an independent process run after confirming its initial substrate structure." : "Starts the first process run from the template’s defined substrate."}</small></div><select value={templateVersionId} onChange={(event) => setTemplateVersionId(event.target.value)}><option value="">{activeRun ? "Choose another process-template version…" : "Choose a process template…"}</option>{assignableTemplates.map((template) => <option key={template.id} value={template.id}>{template.name} · v{template.version} · {template.stepCount} steps</option>)}</select><button className="button" disabled={!templateVersionId || assigning || Boolean(activeRun && !planPreview?.compatible)} onClick={() => void (activeRun ? updatePlan() : beginProcessRun())}>{assigning ? "Saving…" : activeRun ? "Update process" : sample.runs.length ? "Start new run" : "Start first run"}</button>{activeRun && planPreview && <small className={planPreview.compatible ? "muted" : "error-text"}>{planPreview.compatible ? `${planPreview.preservedCount} linked · ${planPreview.additionCount} new · ${planPreview.supersededCount} replaced${planPreview.historicalDifferences.length ? ` · ${planPreview.historicalDifferences.length} historical difference${planPreview.historicalDifferences.length === 1 ? "" : "s"} retained` : ""}` : "This version inserts new work before the execution boundary and cannot update the active process automatically."}</small>}{activeRun && <div className="finish-run-action"><div><strong>Finish this process run</strong><small>{unfinishedCurrentSteps.length ? `${unfinishedCurrentSteps.length} current step${unfinishedCurrentSteps.length === 1 ? "" : "s"} must be completed or skipped first.` : "Seals this run so a new independent process run can begin."}</small></div><button type="button" className="button" disabled={assigning || unfinishedCurrentSteps.length > 0} onClick={() => void finishActiveRun()}>Finish run</button></div>}</div>}
+      <div className="run-workflow-actions card">
+        <div><p className="eyebrow">Run actions</p><strong>{selectedRun ? `Run ${selectedRun.sequenceNo} · ${selectedRun.templateName}` : "No process run yet"}</strong><small>{selectedIsActive ? "Update only future work, or finish this processing stage." : selectedRun ? "This completed run remains read-only unless it is the latest run and is explicitly reopened." : "Start the first processing stage from a template Step 0."}</small></div>
+        <div className="run-workflow-buttons">
+          {selectedIsActive && <button type="button" className="button" onClick={() => openTransition("update")}>Update future plan</button>}
+          {selectedIsActive && <button type="button" className="button" disabled={assigning || unfinishedCurrentSteps.length > 0} title={unfinishedCurrentSteps.length ? "Complete or skip every current step first" : "Finish this run"} onClick={() => void finishActiveRun()}>Finish run</button>}
+          {!activeRun && selectedRun?.status === "complete" && selectedIsLatest && <button type="button" className="button" onClick={() => openTransition("reopen")}>Reopen with updated template</button>}
+          {!activeRun && <button type="button" className="button primary" onClick={() => openTransition("start")}>{sample.runs.length ? "Start new run" : "Start first run"}</button>}
+          {activeRun && !selectedIsActive && <button type="button" className="button" onClick={() => updateSearchParams({ run: activeRun.id })}>View active run</button>}
+        </div>
+      </div>
 
-      {selectedRun ? <section className="runs-section"><MultiSampleRunGrid key={`${selectedRun.id}:${samples.map((item) => item.id).join(",")}`} primaryRun={selectedRun} columns={samples.map((item) => ({ sample: item, run: item.id === sample.id ? selectedRun : item.runs.find((candidate) => candidate.recipeFamilyId === selectedRun.recipeFamilyId && candidate.status === selectedRun.status) ?? null }))} onSaved={load} readOnly={!selectedIsActive} /></section> : <div className="card empty-run-message"><h2>No process run yet</h2><p>Choose a process template above to start the execution grid.</p></div>}
-      {runStartPreview && <StartProcessRunDialog preview={runStartPreview} starting={assigning} error={runStartError} onCancel={() => { setRunStartPreview(null); setRunStartError(""); }} onConfirm={(hash) => void confirmProcessRun(hash)} />}
+      {selectedRun ? <section className="runs-section"><MultiSampleRunGrid key={`${selectedRun.id}:${samples.map((item) => item.id).join(",")}`} primaryRun={selectedRun} columns={samples.map((item) => ({ sample: item, run: item.id === sample.id ? selectedRun : item.runs.find((candidate) => candidate.recipeFamilyId === selectedRun.recipeFamilyId && candidate.status === selectedRun.status) ?? null }))} onSaved={load} readOnly={!selectedIsActive} /></section> : <div className="card empty-run-message"><h2>No process run yet</h2><p>Start the first run to create an execution grid.</p></div>}
+      {transitionMode && !runStartPreview && <div className="run-start-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !assigning) setTransitionMode(null); }}>
+        <section className="run-start-dialog transition-template-dialog" role="dialog" aria-modal="true" aria-labelledby="transition-template-title">
+          <div className="run-start-dialog-heading"><div><p className="eyebrow">{transitionMode === "start" ? sample.runs.length ? "Start new run" : "Start first run" : transitionMode === "reopen" ? "Reopen process run" : "Update future plan"}</p><h2 id="transition-template-title">Choose the incoming process template</h2></div><button type="button" className="drawer-close" disabled={assigning} onClick={() => setTransitionMode(null)} aria-label="Close">×</button></div>
+          <p className="muted">{transitionMode === "start" ? "This creates an independent process run. Earlier runs remain completed." : "Only a newer version of the same process template can continue this run; completed steps remain frozen."}</p>
+          <label className="transition-template-select">Process template<select autoFocus value={templateVersionId} onChange={(event) => { setTemplateVersionId(event.target.value); setRunStartError(""); }}><option value="">Choose a process template…</option>{assignableTemplates.map((template) => <option key={template.id} value={template.id}>{template.name} · v{template.version} · {template.stepCount} executable steps</option>)}</select></label>
+          {!assignableTemplates.length && <p className="warning-card compact-warning">{transitionMode === "start" ? "No process templates are available." : "Import a newer version of this process template before updating or reopening the run."}</p>}
+          {(transitionMode === "update" || transitionMode === "reopen") && planPreview && <div className={`transition-plan-summary ${planPreview.compatible ? "" : "has-conflict"}`}><strong>{planPreview.compatible ? `${planPreview.preservedCount} linked · ${planPreview.additionCount} new · ${planPreview.supersededCount} replaced` : "This version cannot be applied"}</strong><small>{planPreview.blockingReason || `${planPreview.historicalDifferences.length} historical difference${planPreview.historicalDifferences.length === 1 ? "" : "s"} retained`}</small></div>}
+          {runStartError && <p className="error-banner">{runStartError}</p>}
+          <div className="form-actions"><button type="button" className="button" disabled={assigning} onClick={() => setTransitionMode(null)}>Cancel</button><button type="button" className="button primary" disabled={!templateVersionId || assigning || Boolean(transitionMode !== "start" && !planPreview?.compatible)} onClick={() => void (transitionMode === "start" ? beginProcessRun() : planPreview && setRunStartPreview(planPreview.substrateTransition))}>{assigning ? "Loading…" : "Compare structures"}</button></div>
+        </section>
+      </div>}
+      {runStartPreview && transitionMode && <StartProcessRunDialog preview={runStartPreview} action={transitionMode} starting={assigning} error={runStartError} onCancel={() => { setRunStartPreview(null); setRunStartError(""); }} onConfirm={() => void confirmProcessTransition()} />}
     </section>
   </div>;
 }

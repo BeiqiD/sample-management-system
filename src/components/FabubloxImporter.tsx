@@ -3,6 +3,7 @@ import type { FabubloxImportPreview, ParsedFabubloxImage } from "../../shared/ty
 import { api, type TemplateRecord } from "../lib/api";
 import { parseFabuBloxWorkbook } from "../lib/fabublox";
 import { FileDropzone } from "./FileDropzone";
+import { SubstrateStepDetails } from "./SubstrateStepDetails";
 
 function LayerThumbnail({ image, alt }: { image?: ParsedFabubloxImage; alt: string }) {
   const [url, setUrl] = useState("");
@@ -13,6 +14,11 @@ function LayerThumbnail({ image, alt }: { image?: ParsedFabubloxImage; alt: stri
     return () => URL.revokeObjectURL(next);
   }, [image]);
   return url ? <img className="layer-thumbnail" src={url} alt={alt} /> : <div className="layer-placeholder">No diagram</div>;
+}
+
+function substrateStatus(preview: FabubloxImportPreview) {
+  if (!preview.initialSubstrateStep) return "Step 0 missing";
+  return preview.initialStateImageIds.length ? "Substrate Stack detected" : "Detected · no diagram";
 }
 
 interface FabubloxImporterProps {
@@ -60,17 +66,25 @@ export function FabubloxImporter({ templates, onImported }: FabubloxImporterProp
         <div><small>Sheet</small><strong>{preview.source.sheetName}</strong></div>
         <div><small>Steps</small><strong>{preview.steps.length}</strong></div>
         <div><small>Images</small><strong>{preview.images.length}</strong></div>
-        <div><small>Initial substrate</small><strong>{preview.initialStateImageIds.length ? "Detected" : "No diagram"}</strong></div>
+        <div><small>Initial substrate</small><strong>{substrateStatus(preview)}</strong></div>
         <div><small>Unassigned</small><strong>{preview.unassignedImageIds.length}</strong></div>
       </div>
       <div className="card form-grid">
         <label>Process template title<input value={preview.title} disabled={Boolean(recipeFamilyId)} onChange={(event) => setPreview({ ...preview, title: event.target.value })} /></label>
         <label>Version relationship<select value={recipeFamilyId} onChange={(event) => { const id = event.target.value; setRecipeFamilyId(id); const family = families.find((candidate) => candidate.recipeFamilyId === id); if (family) setPreview({ ...preview, title: family.name }); }}><option value="">New process template</option>{families.map((family) => <option key={family.recipeFamilyId} value={family.recipeFamilyId}>New version of {family.name}</option>)}</select><small>{recipeFamilyId ? "The imported workbook becomes the next immutable version immediately." : "Creates a distinct process-template family."}</small></label>
       </div>
-      {preview.initialStateImageIds.length > 0 && <section className="card initial-state-preview">
-        <div><p className="eyebrow">Initial substrate structure</p><h2>Starting state detected from FabuBlox</h2><p className="muted">This diagram becomes the default starting structure when a new process run uses this version.</p></div>
-        <div className="initial-state-preview-images">{preview.initialStateImageIds.map((id) => <LayerThumbnail key={id} image={images.get(id)} alt="Initial substrate structure" />)}</div>
-      </section>}
+      <section className={`card initial-state-preview${preview.initialSubstrateStep ? "" : " missing-initial-state"}`}>
+        <div>
+          <p className="eyebrow">Initial substrate · Step 0</p>
+          <h2>{preview.initialSubstrateStep ? "Substrate Stack" : "Substrate Stack was not found"}</h2>
+          {preview.initialSubstrateStep ? <SubstrateStepDetails step={preview.initialSubstrateStep} /> : <p className="muted">The importer will not borrow a diagram from Step 1. This template cannot start or update a run until it is re-imported with Step 0.</p>}
+        </div>
+        <div className="initial-state-preview-images">
+          {preview.initialStateImageIds.length
+            ? preview.initialStateImageIds.map((id) => <LayerThumbnail key={id} image={images.get(id)} alt="Step 0 Substrate Stack" />)
+            : <div className="layer-placeholder">{preview.initialSubstrateStep ? "Step 0 has no diagram" : "No Step 0 structure"}</div>}
+        </div>
+      </section>
       {preview.warnings.length > 0 && <section className="warning-card"><strong>Import warnings</strong><ul>{preview.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></section>}
       <section className="step-preview-list">
         {preview.steps.map((step) => <article className="card imported-step" key={step.localId}>
