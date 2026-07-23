@@ -1,27 +1,32 @@
-export type RunInitialStateChoice = {
-  hasPreviousRun: boolean;
-  requestedHashProvided: boolean;
-  requestedHash: string | null;
-  templateHash: string | null;
-  sampleCurrentHash: string | null;
+import type { SubstrateTransitionConfirmation } from "../shared/types";
+
+export type SubstrateTransitionFacts = {
+  sampleUpdatedAt: string;
+  previousStateHash: string | null;
+  templateInitialStateHash: string | null;
+  latestRunId: string | null;
+  currentPlanRevisionId?: string;
 };
 
-export function resolveRunInitialState(choice: RunInitialStateChoice): {
+export function validateSubstrateTransition(
+  confirmation: SubstrateTransitionConfirmation | undefined,
+  facts: SubstrateTransitionFacts,
+): {
   ok: true;
-  hash: string | null;
+  initialStateHash: string;
 } | {
   ok: false;
-  reason: "confirmation_required" | "invalid_choice";
+  reason: "confirmation_required" | "template_initial_state_missing" | "stale_confirmation";
 } {
-  if (!choice.hasPreviousRun && choice.sampleCurrentHash === null) {
-    return { ok: true, hash: choice.templateHash };
+  if (!facts.templateInitialStateHash) return { ok: false, reason: "template_initial_state_missing" };
+  if (!confirmation || confirmation.confirmed !== true) return { ok: false, reason: "confirmation_required" };
+  if (confirmation.expectedSampleUpdatedAt !== facts.sampleUpdatedAt
+    || confirmation.expectedPreviousStateHash !== facts.previousStateHash
+    || confirmation.expectedTemplateInitialStateHash !== facts.templateInitialStateHash
+    || confirmation.expectedLatestRunId !== facts.latestRunId
+    || (facts.currentPlanRevisionId !== undefined
+      && confirmation.expectedCurrentPlanRevisionId !== facts.currentPlanRevisionId)) {
+    return { ok: false, reason: "stale_confirmation" };
   }
-  if (!choice.requestedHashProvided) return { ok: false, reason: "confirmation_required" };
-
-  const allowed = new Set([choice.templateHash, choice.sampleCurrentHash]);
-  if (!allowed.has(choice.requestedHash)) return { ok: false, reason: "invalid_choice" };
-  if (choice.requestedHash === null && (choice.templateHash !== null || choice.sampleCurrentHash !== null)) {
-    return { ok: false, reason: "invalid_choice" };
-  }
-  return { ok: true, hash: choice.requestedHash };
+  return { ok: true, initialStateHash: facts.templateInitialStateHash };
 }

@@ -9,7 +9,7 @@ beforeAll(() => {
 
 const transparentPng = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAHnOcQAAAAABJRU5ErkJggg==", "base64"));
 
-async function syntheticDrawingFixture() {
+async function syntheticDrawingFixture(initialName = "Substrate Stack", duplicateInitial = false) {
   const zip = new JSZip();
   zip.file("xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8"?>
     <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
@@ -21,7 +21,7 @@ async function syntheticDrawingFixture() {
     </Relationships>`);
   zip.file("xl/sharedStrings.xml", `<?xml version="1.0" encoding="UTF-8"?>
     <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-      <si><t>Step #</t></si><si><t>Step Name</t></si><si><r><t>Co</t></r><r><t>at</t></r></si>
+      <si><t>Step #</t></si><si><t>Step Name</t></si>
     </sst>`);
   const worksheetPath = "xl/worksheets/sheet1.xml";
   zip.file(worksheetPath, `<?xml version="1.0" encoding="UTF-8"?>
@@ -32,8 +32,10 @@ async function syntheticDrawingFixture() {
           <c r="C1" t="inlineStr"><is><t>Tool Name</t></is></c><c r="D1" t="inlineStr"><is><t>Parameters</t></is></c>
           <c r="E1" t="inlineStr"><is><t>Comments</t></is></c><c r="J1" t="inlineStr"><is><t>Layer Stacks</t></is></c>
         </row>
-        <row r="2"><c r="A2"><v>0</v></c><c r="B2" t="s"><v>2</v></c><c r="C2" t="inlineStr"><is><t>Spinner</t></is></c><c r="D2" t="inlineStr"><is><t>4000 rpm</t></is></c></row>
-        <row r="3"><c r="A3"><v>1</v></c><c r="B3" t="inlineStr"><is><t>Develop</t></is></c><c r="D3" t="inlineStr"><is><t>30 s</t></is></c></row>
+        <row r="2"><c r="A2"><v>0</v></c><c r="B2" t="inlineStr"><is><t>${initialName}</t></is></c><c r="D2" t="inlineStr"><is><t>SOI / 2 µm BOX</t></is></c></row>
+        <row r="3"><c r="A3"><v>1</v></c><c r="B3" t="inlineStr"><is><t>Coat</t></is></c><c r="C3" t="inlineStr"><is><t>Spinner</t></is></c><c r="D3" t="inlineStr"><is><t>4000 rpm</t></is></c></row>
+        <row r="4"><c r="A4"><v>2</v></c><c r="B4" t="inlineStr"><is><t>Develop</t></is></c><c r="D4" t="inlineStr"><is><t>30 s</t></is></c></row>
+        ${duplicateInitial ? '<row r="5"><c r="A5"><v>0</v></c><c r="B5" t="inlineStr"><is><t>Substrate Stack</t></is></c></row>' : ""}
       </sheetData>
       <drawing r:id="rIdDrawing"/>
     </worksheet>`);
@@ -48,7 +50,7 @@ async function syntheticDrawingFixture() {
   </xdr:twoCellAnchor>`;
   zip.file("xl/drawings/drawing1.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-      ${anchor(0, "rInitial")}${anchor(1, "rImageA")}${anchor(2, "rImageB")}${anchor(8, "rUnassigned")}
+      ${anchor(1, "rInitial")}${anchor(2, "rImageA")}${anchor(3, "rImageB")}${anchor(8, "rUnassigned")}
     </xdr:wsDr>`);
   zip.file("xl/drawings/_rels/drawing1.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -74,9 +76,28 @@ describe("OOXML drawing relationships", () => {
       "xl/media/image1.png",
       "xl/media/image5.png",
     ]);
+    expect(preview.initialSubstrateStep?.name).toBe("Substrate Stack");
+    expect(preview.initialSubstrateStep?.parametersText).toBe("SOI / 2 µm BOX");
     expect(preview.initialStateImageIds).toEqual(["image-1"]);
     expect(preview.steps[0].imageIds).toEqual(["image-2"]);
     expect(preview.steps[1].imageIds).toEqual(["image-3"]);
+    expect(preview.steps.map((step) => step.name)).toEqual(["Coat", "Develop"]);
     expect(preview.unassignedImageIds).toEqual(["image-4"]);
+  });
+
+  it("does not guess an initial substrate from a differently named Step 0", async () => {
+    const preview = await parseFabuBloxWorkbook(await syntheticDrawingFixture("Coat"));
+    expect(preview.initialSubstrateStep).toBeNull();
+    expect(preview.initialStateImageIds).toEqual([]);
+    expect(preview.steps.map((step) => step.name)).toEqual(["Coat", "Coat", "Develop"]);
+    expect(preview.warnings).toContainEqual(expect.objectContaining({ code: "missing_initial_substrate_step" }));
+  });
+
+  it("does not choose between duplicate Step 0 substrate definitions", async () => {
+    const preview = await parseFabuBloxWorkbook(await syntheticDrawingFixture("Substrate Stack", true));
+    expect(preview.initialSubstrateStep).toBeNull();
+    expect(preview.initialStateImageIds).toEqual([]);
+    expect(preview.steps).toHaveLength(4);
+    expect(preview.warnings).toContainEqual(expect.objectContaining({ code: "ambiguous_initial_substrate_step" }));
   });
 });

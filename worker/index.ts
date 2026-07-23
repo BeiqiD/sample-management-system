@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { DEFAULT_SAMPLE_STATUS, isSampleStatus, MAX_SPLIT_PIECES, type ConfirmRunStepsInput, type CreateRecordInput, type CreateRunStepCommentsInput, type CreateRunStepInput, type CreateSampleInput, type CreateStateVerificationInput, type DeleteSampleInput, type FinishProcessRunInput, type RunStepTarget, type SampleStatus, type SplitSampleInput, type StartProcessRunInput, type StepStatus, type UpdateRunStepInput, type UpdateSampleInput } from "../shared/types";
-import { hashRecipeManifest, hashStateRepresentation, hashStepDefinition, logicalStepKey, normalizedStepName, sha256Hex, stableJson, STATE_HASH_SCHEME, STEP_HASH_SCHEME } from "../shared/content-addressing";
+import { DEFAULT_SAMPLE_STATUS, isSampleStatus, MAX_SPLIT_PIECES, type ApplyPlanUpdateInput, type ConfirmRunStepsInput, type CreateRecordInput, type CreateRunStepCommentsInput, type CreateRunStepInput, type CreateSampleInput, type CreateStateVerificationInput, type DeleteSampleInput, type FinishProcessRunInput, type InitialSubstrateStep, type RunStepTarget, type SampleStatus, type SplitSampleInput, type StartProcessRunInput, type StepStatus, type UpdateRunStepInput, type UpdateSampleInput } from "../shared/types";
+import { hashInitialSubstrateRepresentation, hashRecipeManifest, hashStateRepresentation, hashStepDefinition, logicalStepKey, normalizedStepName, sha256Hex, stableJson, STATE_HASH_SCHEME, STEP_HASH_SCHEME } from "../shared/content-addressing";
 import { alignFuturePlan } from "../shared/plan-alignment";
 import { isSampleRecordEvent } from "../shared/sample-records";
 import { sampleDetail, sampleEvent, sampleSummary } from "./serializers";
@@ -14,7 +14,7 @@ import { returnedEveryConfirmationTarget } from "./run-step-confirmation";
 import { resolveAssetReferences } from "./asset-dedupe";
 import { titleChangeAudit } from "./sample-update";
 import { loadPlanContext } from "./plan-context";
-import { resolveRunInitialState } from "./run-start";
+import { validateSubstrateTransition } from "./run-start";
 import type { Env } from "./types";
 
 const app = new Hono<{ Bindings: Env; Variables: { userEmail: string } }>().basePath("/api");
@@ -25,6 +25,10 @@ async function digestSha256(buffer: ArrayBuffer) {
 
 function safeObjectName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function normalizedSubstrateStepName(name: string) {
+  return normalizedStepName(name).replace(/[-_]+/g, " ");
 }
 
 function validRunStepTargets(value: unknown): value is RunStepTarget[] {
@@ -87,18 +91,52 @@ type SampleStructureState = {
   stateHash: string | null;
   stepTitle: string | null;
   imageKeys: string[];
+  imageHashes: string[];
 };
 
-async function stateImageKeys(db: D1Database, stateHash: string | null) {
+async function stateAssets(db: D1Database, stateHash: string | null) {
   if (!stateHash) return [];
   const rows = await db.prepare(
-    `SELECT a.r2_key
+    `SELECT a.r2_key, a.sha256
      FROM state_representation_assets sra
      JOIN assets a ON a.id = sra.asset_id AND a.status = 'ready'
      WHERE sra.state_hash = ?
      ORDER BY sra.position, a.id`,
-  ).bind(stateHash).all<{ r2_key: string }>();
-  return rows.results.map((row) => row.r2_key);
+  ).bind(stateHash).all<{ r2_key: string; sha256: string }>();
+  return rows.results;
+}
+
+async function stateImageKeys(db: D1Database, stateHash: string | null) {
+  return (await stateAssets(db, stateHash)).map((row) => row.r2_key);
+}
+
+function parseInitialSubstrateStep(contentJson: string | null): InitialSubstrateStep | null {
+  if (!contentJson) return null;
+  try {
+    const value = JSON.parse(contentJson) as { initialSubstrateStep?: unknown };
+    const step = value.initialSubstrateStep;
+    if (!step || typeof step !== "object") return null;
+    const candidate = step as Partial<InitialSubstrateStep>;
+    if (candidate.stepNumber !== "0" || normalizedSubstrateStepName(candidate.name ?? "") !== "substrate stack") return null;
+    return step as InitialSubstrateStep;
+  } catch {
+    return null;
+  }
+}
+
+function compareSubstrateStructures(
+  previousStateHash: string | null,
+  previousImageHashes: string[],
+  templateStateHash: string | null,
+  templateImageHashes: string[],
+): "same" | "different" | "no_previous_structure" | "not_comparable" {
+  if (!previousStateHash) return "no_previous_structure";
+  if (previousStateHash === templateStateHash) return "same";
+  if (!previousImageHashes.length || !templateImageHashes.length) return "not_comparable";
+  return previousImageHashes.length === templateImageHashes.length
+    && previousImageHashes.every((hash, index) => hash === templateImageHashes[index])
+    ? "same"
+    : "different";
 }
 
 async function loadCurrentSampleStructure(db: D1Database, sampleId: string): Promise<SampleStructureState> {
@@ -108,43 +146,64 @@ async function loadCurrentSampleStructure(db: D1Database, sampleId: string): Pro
        FROM runs WHERE sample_id = ? ORDER BY sequence_no DESC LIMIT 1
      ),
      candidates AS (
-       SELECT rs.expected_state_hash AS state_hash, COALESCE(rs.title, sd.name) AS step_title, 1 AS priority
+       SELECT rs.id AS step_id, rs.expected_state_hash AS state_hash,
+              COALESCE(rs.title, sd.name) AS step_title, 1 AS priority
        FROM run_steps rs
        JOIN latest_run lr ON lr.id = rs.run_id
        LEFT JOIN step_definitions sd ON sd.hash = rs.definition_hash
-       WHERE rs.status = 'done' AND rs.expected_state_hash IS NOT NULL
+       WHERE rs.status = 'done'
          AND (rs.plan_status = 'current' OR rs.actualized_at IS NOT NULL)
+         AND (rs.expected_state_hash IS NOT NULL OR EXISTS (
+           SELECT 1 FROM run_step_assets rsa WHERE rsa.run_step_id = rs.id AND rsa.role = 'execution'
+         ))
        ORDER BY rs.position DESC LIMIT 1
      ),
      latest_initial AS (
-       SELECT initial_state_hash AS state_hash, NULL AS step_title, 2 AS priority
+       SELECT NULL AS step_id, initial_state_hash AS state_hash, NULL AS step_title, 2 AS priority
        FROM latest_run WHERE initial_state_hash IS NOT NULL
      ),
      historical_step AS (
-       SELECT rs.expected_state_hash AS state_hash, COALESCE(rs.title, sd.name) AS step_title, 3 AS priority
+       SELECT rs.id AS step_id, rs.expected_state_hash AS state_hash,
+              COALESCE(rs.title, sd.name) AS step_title, 3 AS priority
        FROM run_steps rs
        JOIN runs r ON r.id = rs.run_id
        LEFT JOIN step_definitions sd ON sd.hash = rs.definition_hash
-       WHERE r.sample_id = ? AND rs.status = 'done' AND rs.expected_state_hash IS NOT NULL
+       WHERE r.sample_id = ? AND rs.status = 'done'
          AND (rs.plan_status = 'current' OR rs.actualized_at IS NOT NULL)
+         AND (rs.expected_state_hash IS NOT NULL OR EXISTS (
+           SELECT 1 FROM run_step_assets rsa WHERE rsa.run_step_id = rs.id AND rsa.role = 'execution'
+         ))
        ORDER BY r.sequence_no DESC, rs.position DESC LIMIT 1
      ),
      inherited_sample AS (
-       SELECT inherited_state_hash AS state_hash, NULL AS step_title, 4 AS priority
+       SELECT NULL AS step_id, inherited_state_hash AS state_hash, NULL AS step_title, 4 AS priority
        FROM samples WHERE id = ? AND inherited_state_hash IS NOT NULL
      )
-     SELECT state_hash, step_title FROM (
+     SELECT step_id, state_hash, step_title FROM (
        SELECT * FROM candidates
        UNION ALL SELECT * FROM latest_initial
        UNION ALL SELECT * FROM historical_step
        UNION ALL SELECT * FROM inherited_sample
      ) ORDER BY priority LIMIT 1`,
-  ).bind(sampleId, sampleId, sampleId).first<{ state_hash: string; step_title: string | null }>();
-  const stateHash = row?.state_hash ?? null;
+  ).bind(sampleId, sampleId, sampleId).first<{ step_id: string | null; state_hash: string | null; step_title: string | null }>();
+  const executionAssets = row?.step_id ? await db.prepare(
+    `SELECT a.r2_key, a.sha256
+     FROM run_step_assets rsa
+     JOIN assets a ON a.id = rsa.asset_id AND a.status = 'ready'
+     WHERE rsa.run_step_id = ? AND rsa.role = 'execution'
+     ORDER BY rsa.position, a.id`,
+  ).bind(row.step_id).all<{ r2_key: string; sha256: string }>() : { results: [] };
+  const assets = executionAssets.results.length
+    ? executionAssets.results
+    : await stateAssets(db, row?.state_hash ?? null);
+  const stateHash = executionAssets.results.length
+    ? `execution-assets:${await sha256Hex(stableJson(executionAssets.results.map((asset) => asset.sha256)))}`
+    : row?.state_hash ?? null;
   return {
     stateHash,
     stepTitle: row?.step_title ?? null,
-    imageKeys: await stateImageKeys(db, stateHash),
+    imageKeys: assets.map((asset) => asset.r2_key),
+    imageHashes: assets.map((asset) => asset.sha256),
   };
 }
 
@@ -167,35 +226,51 @@ const sampleOverviewSelect = `
              SELECT COALESCE(rs.title, sd.name) AS state_step_title, 1 AS priority
              FROM run_steps rs
              LEFT JOIN step_definitions sd ON sd.hash = rs.definition_hash
-             WHERE rs.run_id = r.id AND rs.status = 'done' AND rs.expected_state_hash IS NOT NULL
+             WHERE rs.run_id = r.id AND rs.status = 'done'
                AND (rs.plan_status = 'current' OR rs.actualized_at IS NOT NULL)
+               AND (rs.expected_state_hash IS NOT NULL OR EXISTS (
+                 SELECT 1 FROM run_step_assets rsa WHERE rsa.run_step_id = rs.id AND rsa.role = 'execution'
+               ))
              ORDER BY rs.position DESC LIMIT 1
            )
          ) AS current_state_step_title,
          (
-           SELECT a.r2_key
-           FROM state_representation_assets sra
-           JOIN assets a ON a.id = sra.asset_id AND a.status = 'ready'
-           WHERE sra.state_hash = COALESCE(
+           COALESCE(
              (
-               SELECT rs.expected_state_hash
+               SELECT a.r2_key
                FROM run_steps rs
-               WHERE rs.run_id = r.id AND rs.status = 'done' AND rs.expected_state_hash IS NOT NULL
+               JOIN run_step_assets rsa ON rsa.run_step_id = rs.id AND rsa.role = 'execution'
+               JOIN assets a ON a.id = rsa.asset_id AND a.status = 'ready'
+               WHERE rs.run_id = r.id AND rs.status = 'done'
                  AND (rs.plan_status = 'current' OR rs.actualized_at IS NOT NULL)
-               ORDER BY rs.position DESC LIMIT 1
+               ORDER BY rs.position DESC, rsa.position, a.id LIMIT 1
              ),
-             r.initial_state_hash,
              (
-               SELECT rs.expected_state_hash
-               FROM run_steps rs JOIN runs earlier ON earlier.id = rs.run_id
-               WHERE earlier.sample_id = s.id AND earlier.sequence_no < r.sequence_no
-                 AND rs.status = 'done' AND rs.expected_state_hash IS NOT NULL
-                 AND (rs.plan_status = 'current' OR rs.actualized_at IS NOT NULL)
-               ORDER BY earlier.sequence_no DESC, rs.position DESC LIMIT 1
-             ),
-             s.inherited_state_hash
+               SELECT a.r2_key
+               FROM state_representation_assets sra
+               JOIN assets a ON a.id = sra.asset_id AND a.status = 'ready'
+               WHERE sra.state_hash = COALESCE(
+                 (
+                   SELECT rs.expected_state_hash
+                   FROM run_steps rs
+                   WHERE rs.run_id = r.id AND rs.status = 'done' AND rs.expected_state_hash IS NOT NULL
+                     AND (rs.plan_status = 'current' OR rs.actualized_at IS NOT NULL)
+                   ORDER BY rs.position DESC LIMIT 1
+                 ),
+                 r.initial_state_hash,
+                 (
+                   SELECT rs.expected_state_hash
+                   FROM run_steps rs JOIN runs earlier ON earlier.id = rs.run_id
+                   WHERE earlier.sample_id = s.id AND earlier.sequence_no < r.sequence_no
+                     AND rs.status = 'done' AND rs.expected_state_hash IS NOT NULL
+                     AND (rs.plan_status = 'current' OR rs.actualized_at IS NOT NULL)
+                   ORDER BY earlier.sequence_no DESC, rs.position DESC LIMIT 1
+                 ),
+                 s.inherited_state_hash
+               )
+               ORDER BY sra.position, a.id LIMIT 1
+             )
            )
-           ORDER BY sra.position, a.id LIMIT 1
          ) AS current_state_thumbnail_key
   FROM samples s
   LEFT JOIN runs r ON r.sample_id = s.id
@@ -868,11 +943,11 @@ app.post("/samples/:id/runs/preview", async (c) => {
   const [sample, template, latestRun, currentState] = await Promise.all([
     c.env.DB.prepare("SELECT updated_at FROM samples WHERE id = ?").bind(sampleId).first<{ updated_at: string }>(),
     c.env.DB.prepare(
-      `SELECT id, name, version, initial_state_hash
+      `SELECT id, name, version, initial_state_hash, content_json
        FROM template_versions
        WHERE id = ? AND archived_at IS NULL
          AND NOT EXISTS (SELECT 1 FROM imports i WHERE i.template_version_id = template_versions.id AND i.status != 'ready')`,
-    ).bind(templateVersionId).first<{ id: string; name: string; version: number; initial_state_hash: string | null }>(),
+    ).bind(templateVersionId).first<{ id: string; name: string; version: number; initial_state_hash: string | null; content_json: string | null }>(),
     c.env.DB.prepare(
       "SELECT id, status FROM runs WHERE sample_id = ? ORDER BY sequence_no DESC LIMIT 1",
     ).bind(sampleId).first<{ id: string; status: string }>(),
@@ -883,15 +958,28 @@ app.post("/samples/:id/runs/preview", async (c) => {
   if (latestRun?.status === "active") {
     throw new HTTPException(409, { message: "Finish the active process run or update its process template instead." });
   }
+  const templateAssets = await stateAssets(c.env.DB, template.initial_state_hash);
+  const initialSubstrateStep = parseInitialSubstrateStep(template.content_json);
+  const canConfirm = Boolean(template.initial_state_hash && initialSubstrateStep);
   return c.json({
     successor: Boolean(latestRun),
     sampleUpdatedAt: sample.updated_at,
+    expectedLatestRunId: latestRun?.id ?? null,
+    comparison: compareSubstrateStructures(
+      currentState.stateHash,
+      currentState.imageHashes,
+      template.initial_state_hash,
+      templateAssets.map((asset) => asset.sha256),
+    ),
+    canConfirm,
+    blockingReason: canConfirm ? null : "This process-template version has no valid Step 0: Substrate Stack snapshot. Re-import it before starting a run.",
     template: {
       id: template.id,
       name: template.name,
       version: template.version,
       initialStateHash: template.initial_state_hash,
-      initialStateImageKeys: await stateImageKeys(c.env.DB, template.initial_state_hash),
+      initialStateImageKeys: templateAssets.map((asset) => asset.r2_key),
+      initialSubstrateStep,
     },
     sampleCurrentState: {
       hash: currentState.stateHash,
@@ -904,15 +992,16 @@ app.post("/samples/:id/runs/preview", async (c) => {
 app.post("/samples/:id/runs", async (c) => {
   const sampleId = c.req.param("id");
   const input = await c.req.json<StartProcessRunInput>();
+  if (!input || typeof input !== "object") throw new HTTPException(400, { message: "A process-template version and substrate confirmation are required" });
   const { templateVersionId } = input;
-  if (!templateVersionId) throw new HTTPException(400, { message: "Template version is required" });
+  if (typeof templateVersionId !== "string" || !templateVersionId) throw new HTTPException(400, { message: "Template version is required" });
   const [sample, template, templateStepRows, latestRun] = await Promise.all([
     c.env.DB.prepare("SELECT code, updated_at FROM samples WHERE id = ?").bind(sampleId).first<{ code: string; updated_at: string }>(),
     c.env.DB.prepare(
-      `SELECT tv.name, tv.template_type, tv.version, tv.recipe_family_id, tv.initial_state_hash
+      `SELECT tv.name, tv.template_type, tv.version, tv.recipe_family_id, tv.initial_state_hash, tv.content_json
        FROM template_versions tv WHERE tv.id = ? AND tv.archived_at IS NULL
        AND NOT EXISTS (SELECT 1 FROM imports i WHERE i.template_version_id = tv.id AND i.status != 'ready')`,
-    ).bind(templateVersionId).first<{ name: string; template_type: "process" | "module" | "recipe"; version: number; recipe_family_id: string; initial_state_hash: string | null }>(),
+    ).bind(templateVersionId).first<{ name: string; template_type: "process" | "module" | "recipe"; version: number; recipe_family_id: string; initial_state_hash: string | null; content_json: string | null }>(),
     c.env.DB.prepare(
       `SELECT id, position, logical_step_key, definition_hash, expected_state_hash
        FROM template_steps WHERE template_version_id = ? ORDER BY position`,
@@ -923,23 +1012,24 @@ app.post("/samples/:id/runs", async (c) => {
   ]);
   if (!sample) throw new HTTPException(404, { message: "Sample not found" });
   if (!template) throw new HTTPException(404, { message: "Template version not found" });
+  if (!parseInitialSubstrateStep(template.content_json)) {
+    throw new HTTPException(409, { message: "This process-template version has no valid Step 0: Substrate Stack snapshot. Re-import it before starting a run." });
+  }
   if (latestRun?.status === "active") throw new HTTPException(409, { message: "This sample already has an active process run. Update its process template or finish it before starting a new run." });
   const currentState = await loadCurrentSampleStructure(c.env.DB, sampleId);
-  if ((latestRun || currentState.stateHash) && (typeof input.expectedSampleUpdatedAt !== "string" || input.expectedSampleUpdatedAt !== sample.updated_at)) {
-    throw new HTTPException(409, { message: "This sample changed after the substrate structure was reviewed. Review it again before starting the run." });
-  }
-  const initialState = resolveRunInitialState({
-    hasPreviousRun: Boolean(latestRun),
-    requestedHashProvided: Object.prototype.hasOwnProperty.call(input, "initialStateHash"),
-    requestedHash: input.initialStateHash ?? null,
-    templateHash: template.initial_state_hash,
-    sampleCurrentHash: currentState.stateHash,
+  const initialState = validateSubstrateTransition(input.substrateConfirmation, {
+    sampleUpdatedAt: sample.updated_at,
+    previousStateHash: currentState.stateHash,
+    templateInitialStateHash: template.initial_state_hash,
+    latestRunId: latestRun?.id ?? null,
   });
   if (!initialState.ok) {
     throw new HTTPException(409, {
-      message: initialState.reason === "confirmation_required"
-        ? "Confirm the initial substrate structure before starting this process run."
-        : "The selected initial substrate structure is no longer available. Review the current and template structures again.",
+      message: initialState.reason === "template_initial_state_missing"
+        ? "This process-template version has no valid Step 0: Substrate Stack snapshot. Re-import it before starting a run."
+        : initialState.reason === "confirmation_required"
+          ? "Compare the previous structure with Step 0 and confirm that the handoff is expected."
+          : "The sample, previous run, or template changed after review. Compare the structures again.",
     });
   }
   const steps = templateStepRows.results;
@@ -962,10 +1052,16 @@ app.post("/samples/:id/runs", async (c) => {
          predecessor_run_id, anchor_step_id, sequence_no, run_group_id,
          template_name_snapshot, template_type_snapshot, template_version_snapshot,
          initial_state_hash, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       FROM samples s
+       WHERE s.id = ? AND s.updated_at = ?
+         AND NOT EXISTS (SELECT 1 FROM runs active WHERE active.sample_id = s.id AND active.status = 'active')
+         AND COALESCE((SELECT id FROM runs latest WHERE latest.sample_id = s.id ORDER BY sequence_no DESC LIMIT 1), '')
+             = COALESCE(?, '')`,
     ).bind(runId, sampleId, template.recipe_family_id, templateVersionId, planRevisionId,
       latestRun?.id ?? null, anchor?.id ?? null, Number(latestRun?.sequence_no ?? 0) + 1, crypto.randomUUID(),
-      template.name, template.template_type, template.version, initialState.hash, userEmail, now),
+      template.name, template.template_type, template.version, initialState.initialStateHash, userEmail, now,
+      sampleId, input.substrateConfirmation!.expectedSampleUpdatedAt, latestRun?.id ?? null),
     c.env.DB.prepare(
       `INSERT INTO run_plan_revisions
        (id, run_id, revision_no, template_version_id, effective_after_step_id, reason, actor_email, created_at)
@@ -986,8 +1082,13 @@ app.post("/samples/:id/runs", async (c) => {
       templateVersion: template.version,
       predecessorRunId: latestRun?.id ?? null,
       anchorStepId: anchor?.id ?? null,
-      initialStateHash: initialState.hash,
-      initialStateSource: initialState.hash === template.initial_state_hash ? "process_template" : "sample_current_state",
+      initialStateHash: initialState.initialStateHash,
+      initialStateSource: "process_template_step_0",
+      substrateConfirmation: {
+        previousStateHash: currentState.stateHash,
+        templateInitialStateHash: template.initial_state_hash,
+        exactStateHashMatch: currentState.stateHash === template.initial_state_hash,
+      },
     }), userEmail, now),
     c.env.DB.prepare("UPDATE samples SET updated_by = ?, updated_at = ? WHERE id = ?").bind(userEmail, now, sampleId),
   ];
@@ -995,6 +1096,9 @@ app.post("/samples/:id/runs", async (c) => {
   try { await c.env.DB.batch(statements); }
   catch (error) {
     if (String(error).includes("template version archived")) throw new HTTPException(409, { message: "This process-template version was archived before the run started" });
+    if (String(error).includes("FOREIGN KEY") || String(error).includes("constraint")) {
+      throw new HTTPException(409, { message: "The sample or its latest run changed while the structures were being confirmed. Review them again." });
+    }
     throw error;
   }
   return c.json({ id: runId }, 201);
@@ -1065,14 +1169,69 @@ app.post("/samples/:sampleId/runs/:runId/plan-update/preview", async (c) => {
   const { templateVersionId } = await c.req.json<{ templateVersionId?: string }>();
   if (!templateVersionId) throw new HTTPException(400, { message: "A template version is required" });
   const context = await loadPlanContext(c.env.DB, sampleId, runId, templateVersionId);
+  const [sample, latestRun, currentState, templateAssets] = await Promise.all([
+    c.env.DB.prepare("SELECT updated_at FROM samples WHERE id = ?").bind(sampleId).first<{ updated_at: string }>(),
+    c.env.DB.prepare("SELECT id, status FROM runs WHERE sample_id = ? ORDER BY sequence_no DESC LIMIT 1")
+      .bind(sampleId).first<{ id: string; status: string }>(),
+    loadCurrentSampleStructure(c.env.DB, sampleId),
+    stateAssets(c.env.DB, context.nextTemplate.initial_state_hash),
+  ]);
+  if (!sample) throw new HTTPException(404, { message: "Sample not found" });
   const sameFamily = context.run.recipe_family_id === context.nextTemplate.recipe_family_id;
+  const isNewerVersion = context.nextTemplate.version > Number(context.run.current_template_version_number);
   const alignment = sameFamily ? alignFuturePlan(context.existing, context.next) : {
     matches: [], additions: [], supersededStepIds: [], conflicts: [], historicalDifferences: [],
   };
+  const canReopen = context.run.status === "complete" && latestRun?.id === runId;
+  const lifecycleAllowed = context.run.status === "active" || canReopen;
+  const hasFutureWork = context.run.status === "active" || alignment.additions.length > 0;
+  const initialSubstrateStep = parseInitialSubstrateStep(context.nextTemplate.content_json);
+  const hasInitialSubstrate = Boolean(context.nextTemplate.initial_state_hash && initialSubstrateStep);
+  const blockingReason = !sameFamily
+    ? "An in-place update must use another version of the same process template."
+    : !isNewerVersion
+      ? "Choose a newer version of this process template."
+    : !lifecycleAllowed
+      ? "Only an active run or the latest completed run can be updated."
+      : !hasFutureWork
+        ? "This version adds no future work after the completed run."
+        : alignment.conflicts.length
+          ? "This version inserts new work before the execution boundary."
+          : !hasInitialSubstrate
+            ? "This process-template version has no valid Step 0: Substrate Stack snapshot."
+            : null;
   return c.json({
-    compatible: sameFamily && alignment.conflicts.length === 0,
+    compatible: blockingReason === null,
+    blockingReason,
     currentTemplateVersionId: context.run.current_template_version_id,
     nextTemplateVersionId: templateVersionId,
+    canReopen,
+    substrateTransition: {
+      successor: false,
+      sampleUpdatedAt: sample.updated_at,
+      expectedLatestRunId: latestRun?.id ?? null,
+      comparison: compareSubstrateStructures(
+        currentState.stateHash,
+        currentState.imageHashes,
+        context.nextTemplate.initial_state_hash,
+        templateAssets.map((asset) => asset.sha256),
+      ),
+      canConfirm: hasInitialSubstrate,
+      blockingReason: hasInitialSubstrate ? null : "This process-template version has no valid Step 0: Substrate Stack snapshot. Re-import it before updating the run.",
+      template: {
+        id: context.nextTemplate.id,
+        name: context.nextTemplate.name,
+        version: context.nextTemplate.version,
+        initialStateHash: context.nextTemplate.initial_state_hash,
+        initialStateImageKeys: templateAssets.map((asset) => asset.r2_key),
+        initialSubstrateStep,
+      },
+      sampleCurrentState: {
+        hash: currentState.stateHash,
+        stepTitle: currentState.stepTitle,
+        imageKeys: currentState.imageKeys,
+      },
+    },
     preservedCount: alignment.matches.length,
     additionCount: alignment.additions.length,
     supersededCount: alignment.supersededStepIds.length,
@@ -1084,21 +1243,56 @@ app.post("/samples/:sampleId/runs/:runId/plan-update/preview", async (c) => {
 
 app.post("/samples/:sampleId/runs/:runId/plan-update", async (c) => {
   const { sampleId, runId } = c.req.param();
-  const input = await c.req.json<{ templateVersionId?: string; reason?: string }>();
-  if (!input.templateVersionId || (input.reason !== undefined && typeof input.reason !== "string")) {
-    throw new HTTPException(400, { message: "A process-template version and optional reason are required" });
+  const input = await c.req.json<ApplyPlanUpdateInput>();
+  if (!input || typeof input !== "object" || typeof input.templateVersionId !== "string" || !input.templateVersionId || (input.reason !== undefined && typeof input.reason !== "string")) {
+    throw new HTTPException(400, { message: "A process-template version, substrate confirmation, and optional reason are required" });
   }
   const context = await loadPlanContext(c.env.DB, sampleId, runId, input.templateVersionId);
-  if (context.run.status !== "active") throw new HTTPException(409, { message: "Only an active run can receive a plan update" });
+  const [sample, latestRun, currentState] = await Promise.all([
+    c.env.DB.prepare("SELECT updated_at FROM samples WHERE id = ?").bind(sampleId).first<{ updated_at: string }>(),
+    c.env.DB.prepare("SELECT id, status FROM runs WHERE sample_id = ? ORDER BY sequence_no DESC LIMIT 1")
+      .bind(sampleId).first<{ id: string; status: string }>(),
+    loadCurrentSampleStructure(c.env.DB, sampleId),
+  ]);
+  if (!sample) throw new HTTPException(404, { message: "Sample not found" });
+  const reopening = context.run.status === "complete";
+  if (context.run.status !== "active" && !(reopening && latestRun?.id === runId)) {
+    throw new HTTPException(409, { message: "Only an active run or the latest completed run can receive this process update" });
+  }
   if (context.run.recipe_family_id !== context.nextTemplate.recipe_family_id) {
     throw new HTTPException(409, { message: "An in-place process update must use another version of the same process template. Finish this run before choosing a different template." });
+  }
+  if (context.nextTemplate.version <= Number(context.run.current_template_version_number)) {
+    throw new HTTPException(409, { message: "A process update must use a newer version of the current process template." });
+  }
+  if (!parseInitialSubstrateStep(context.nextTemplate.content_json)) {
+    throw new HTTPException(409, { message: "This process-template version has no valid Step 0: Substrate Stack snapshot. Re-import it before updating the run." });
   }
   const alignment = alignFuturePlan(context.existing, context.next);
   if (alignment.conflicts.length) {
     throw new HTTPException(409, { message: "This version inserts new work before the execution boundary. Start a new process run or review the template alignment." });
   }
+  if (reopening && !alignment.additions.length) {
+    throw new HTTPException(409, { message: "This template version adds no future work after the completed run. Start a new run if this is a separate processing stage." });
+  }
+  const transition = validateSubstrateTransition(input.substrateConfirmation, {
+    sampleUpdatedAt: sample.updated_at,
+    previousStateHash: currentState.stateHash,
+    templateInitialStateHash: context.nextTemplate.initial_state_hash,
+    latestRunId: latestRun?.id ?? null,
+    currentPlanRevisionId: context.run.current_plan_revision_id,
+  });
+  if (!transition.ok) {
+    throw new HTTPException(409, {
+      message: transition.reason === "template_initial_state_missing"
+        ? "This process-template version has no valid Step 0: Substrate Stack snapshot. Re-import it before updating the run."
+        : transition.reason === "confirmation_required"
+          ? "Compare the last recorded structure with Step 0 and confirm that the handoff is expected."
+          : "The sample, run plan, or template changed after review. Compare the structures again.",
+    });
+  }
 
-  const now = new Date().toISOString();
+  const now = new Date(Math.max(Date.now(), Date.parse(sample.updated_at) + 1)).toISOString();
   const userEmail = c.get("userEmail");
   const revisionId = crypto.randomUUID();
   const matchByTemplate = new Map(alignment.matches.map((match) => [match.templateStepId, match]));
@@ -1137,13 +1331,20 @@ app.post("/samples/:sampleId/runs/:runId/plan-update", async (c) => {
     c.env.DB.prepare(
       `INSERT INTO run_plan_revisions
        (id, run_id, revision_no, template_version_id, effective_after_step_id, reason, actor_email, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(revisionId, runId, Number(context.run.revision_no) + 1, input.templateVersionId,
-      executionHead?.id ?? null, input.reason?.trim() || "Imported process-template version update", userEmail, now),
+       SELECT ?, r.id, ?, ?, ?, ?, ?, ?
+       FROM runs r JOIN samples s ON s.id = r.sample_id
+       WHERE r.id = ? AND r.sample_id = ? AND r.current_plan_revision_id = ?
+         AND r.status = ? AND s.updated_at = ?
+         AND (? = 0 OR NOT EXISTS (SELECT 1 FROM runs successor WHERE successor.predecessor_run_id = r.id))`,
+    ).bind(revisionId, Number(context.run.revision_no) + 1, input.templateVersionId,
+      executionHead?.id ?? null, input.reason?.trim() || "Imported process-template version update", userEmail, now,
+      runId, sampleId, input.substrateConfirmation.expectedCurrentPlanRevisionId,
+      reopening ? "complete" : "active", input.substrateConfirmation.expectedSampleUpdatedAt, reopening ? 1 : 0),
     c.env.DB.prepare(
       `UPDATE run_steps SET position = -1000000000 - (? * 1000000) - position
-       WHERE run_id = ? AND origin = 'template' AND actualized_at IS NULL AND plan_status = 'current'`,
-    ).bind(Number(context.run.revision_no) + 1, runId),
+       WHERE run_id = ? AND origin = 'template' AND actualized_at IS NULL AND plan_status = 'current'
+         AND EXISTS (SELECT 1 FROM run_plan_revisions WHERE id = ?)`,
+    ).bind(Number(context.run.revision_no) + 1, runId, revisionId),
   ];
   for (let index = 0; index < futureMatches.length; index += 12) {
     const chunk = futureMatches.slice(index, index + 12);
@@ -1160,8 +1361,9 @@ app.post("/samples/:sampleId/runs/:runId/plan-update", async (c) => {
          definition_hash = (SELECT definition_hash FROM changes WHERE changes.id = run_steps.id),
          expected_state_hash = (SELECT expected_state_hash FROM changes WHERE changes.id = run_steps.id),
          plan_status = 'current', updated_by = ?, updated_at = ?
-       WHERE id IN (SELECT id FROM changes)`,
-    ).bind(...bindings, userEmail, now));
+       WHERE id IN (SELECT id FROM changes)
+         AND EXISTS (SELECT 1 FROM run_plan_revisions WHERE id = ?)`,
+    ).bind(...bindings, userEmail, now, revisionId));
   }
   statements.push(...bulkInsertStatements(c.env.DB, "run_steps",
     ["id", "run_id", "previous_step_id", "position", "origin", "plan_status", "template_step_id", "logical_step_key", "definition_hash", "expected_state_hash", "created_at", "updated_by", "updated_at"],
@@ -1171,8 +1373,9 @@ app.post("/samples/:sampleId/runs/:runId/plan-update", async (c) => {
       const ids = alignment.supersededStepIds.slice(index, index + 80);
       statements.push(c.env.DB.prepare(
         `UPDATE run_steps SET plan_status = 'superseded', updated_by = ?, updated_at = ?
-         WHERE run_id = ? AND id IN (${ids.map(() => "?").join(", ")})`,
-      ).bind(userEmail, now, runId, ...ids));
+         WHERE run_id = ? AND id IN (${ids.map(() => "?").join(", ")})
+           AND EXISTS (SELECT 1 FROM run_plan_revisions WHERE id = ?)`,
+      ).bind(userEmail, now, runId, ...ids, revisionId));
     }
   }
   const linkRows = context.next.map((step) => {
@@ -1186,23 +1389,43 @@ app.post("/samples/:sampleId/runs/:runId/plan-update", async (c) => {
       `UPDATE runs SET current_plan_revision_id = ?, template_version_id = ?,
               template_name_snapshot = ?, template_type_snapshot = ?, template_version_snapshot = ?,
               status = 'active', completed_at = NULL
-       WHERE id = ? AND sample_id = ? AND status = 'active'`,
+       WHERE id = ? AND sample_id = ? AND status = ?
+         AND EXISTS (SELECT 1 FROM run_plan_revisions WHERE id = ?)`,
     ).bind(revisionId, input.templateVersionId, context.nextTemplate.name, context.nextTemplate.template_type,
-      context.nextTemplate.version, runId, sampleId),
+      context.nextTemplate.version, runId, sampleId, reopening ? "complete" : "active", revisionId),
     c.env.DB.prepare(
       `INSERT INTO events (id, sample_id, kind, body, metadata_json, actor_email, created_at)
-       VALUES (?, ?, 'plan', ?, ?, ?, ?)`,
+       SELECT ?, ?, 'plan', ?, ?, ?, ?
+       WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND current_plan_revision_id = ?)`,
     ).bind(crypto.randomUUID(), sampleId,
-      `Updated active plan to ${context.nextTemplate.name} v${context.nextTemplate.version}`,
+      `${reopening ? "Reopened process run with" : "Updated active plan to"} ${context.nextTemplate.name} v${context.nextTemplate.version}`,
       JSON.stringify({ runId, planRevisionId: revisionId, fromTemplateVersionId: context.run.current_template_version_id,
         toTemplateVersionId: input.templateVersionId, preserved: alignment.matches.length,
         added: alignment.additions.length, superseded: alignment.supersededStepIds.length,
-        historicalDifferences: alignment.historicalDifferences }), userEmail, now),
-    c.env.DB.prepare("UPDATE samples SET updated_by = ?, updated_at = ? WHERE id = ?")
-      .bind(userEmail, now, sampleId),
+        historicalDifferences: alignment.historicalDifferences, action: reopening ? "process_run_reopened" : "active_plan_updated",
+        substrateConfirmation: {
+          previousStateHash: currentState.stateHash,
+          templateInitialStateHash: context.nextTemplate.initial_state_hash,
+        } }), userEmail, now, runId, revisionId),
+    c.env.DB.prepare(
+      `UPDATE samples SET updated_by = ?, updated_at = ?
+       WHERE id = ? AND EXISTS (SELECT 1 FROM runs WHERE id = ? AND current_plan_revision_id = ?)`,
+    ).bind(userEmail, now, sampleId, runId, revisionId),
   );
   if (statements.length > 49) throw new HTTPException(413, { message: "This plan update is too large for one atomic operation" });
-  await c.env.DB.batch(statements);
+  try {
+    const results = await c.env.DB.batch(statements);
+    if (!results[0].meta.changes || !results[results.length - 3].meta.changes
+      || !results[results.length - 2].meta.changes || !results[results.length - 1].meta.changes) {
+      throw new HTTPException(409, { message: "The run or sample changed while the structures were being confirmed. Review them again." });
+    }
+  } catch (error) {
+    if (error instanceof HTTPException) throw error;
+    if (String(error).includes("FOREIGN KEY") || String(error).includes("constraint")) {
+      throw new HTTPException(409, { message: "The run or sample changed while the structures were being confirmed. Review them again." });
+    }
+    throw error;
+  }
   return c.json({ ok: true, planRevisionId: revisionId, revisionNumber: Number(context.run.revision_no) + 1 });
 });
 
@@ -1850,6 +2073,7 @@ app.post("/imports/fabublox", async (c) => {
     title: string;
     recipeFamilyId?: string | null;
     source: { fileName: string; fileSha256: string; sheetName: string };
+    initialSubstrateStep: InitialSubstrateStep | null;
     steps: Array<{
       localId: string; sourceRow: number; position: number; stepNumber: string | null;
       sectionName: string | null; name: string; toolName: string | null;
@@ -1864,7 +2088,12 @@ app.post("/imports/fabublox", async (c) => {
     initialStateImageIds: string[];
     warnings: unknown[];
   };
-  if (manifest.schemaVersion !== 1 || typeof manifest.title !== "string" || !manifest.title.trim() || manifest.title.length > 200 || typeof manifest.source?.sheetName !== "string" || !manifest.source.sheetName || !Array.isArray(manifest.steps) || !manifest.steps.length || !Array.isArray(manifest.images) || !Array.isArray(manifest.initialStateImageIds) || !Array.isArray(manifest.warnings)) {
+  if (manifest.schemaVersion !== 2 || typeof manifest.title !== "string" || !manifest.title.trim() || manifest.title.length > 200 || typeof manifest.source?.sheetName !== "string" || !manifest.source.sheetName || !Array.isArray(manifest.steps) || !manifest.steps.length || !Array.isArray(manifest.images) || !Array.isArray(manifest.initialStateImageIds) || !Array.isArray(manifest.warnings)
+    || (manifest.initialSubstrateStep !== null && (typeof manifest.initialSubstrateStep !== "object"
+      || manifest.initialSubstrateStep.stepNumber !== "0"
+      || typeof manifest.initialSubstrateStep.name !== "string"
+      || normalizedSubstrateStepName(manifest.initialSubstrateStep.name) !== "substrate stack"
+      || !Array.isArray(manifest.initialSubstrateStep.imageIds)))) {
     throw new HTTPException(400, { message: "Invalid FabuBlox manifest" });
   }
   if (manifest.recipeFamilyId !== undefined && manifest.recipeFamilyId !== null && typeof manifest.recipeFamilyId !== "string") {
@@ -1877,9 +2106,36 @@ app.post("/imports/fabublox", async (c) => {
     if (!(form.get(`image:${image.localId}`) instanceof File)) throw new HTTPException(400, { message: `Missing uploaded image ${image.localId}` });
   }
   const imageIds = new Set(manifest.images.map((image) => image.localId));
+  if (imageIds.size !== manifest.images.length || manifest.images.some((image) => typeof image.localId !== "string" || !image.localId)) {
+    throw new HTTPException(400, { message: "Imported image identifiers must be unique" });
+  }
   if (new Set(manifest.initialStateImageIds).size !== manifest.initialStateImageIds.length
     || manifest.initialStateImageIds.some((id) => typeof id !== "string" || !imageIds.has(id))) {
     throw new HTTPException(400, { message: "Invalid initial substrate image selection" });
+  }
+  if (manifest.initialSubstrateStep) {
+    const declared = new Set(manifest.initialSubstrateStep.imageIds);
+    if (manifest.initialStateImageIds.some((id) => !declared.has(id))
+      || manifest.initialSubstrateStep.imageIds.some((id) => !manifest.initialStateImageIds.includes(id))
+      || manifest.steps.some((step) => step.localId === manifest.initialSubstrateStep?.localId)) {
+      throw new HTTPException(400, { message: "Step 0 must be represented only as the initial substrate" });
+    }
+  } else if (manifest.initialStateImageIds.length) {
+    throw new HTTPException(400, { message: "Initial substrate images require Step 0: Substrate Stack" });
+  }
+  const processStepIds = new Set(manifest.steps.map((step) => step.localId));
+  if (processStepIds.size !== manifest.steps.length
+    || (manifest.initialSubstrateStep && processStepIds.has(manifest.initialSubstrateStep.localId))) {
+    throw new HTTPException(400, { message: "Process and substrate step identifiers must be unique" });
+  }
+  const allowedStepIds = new Set([
+    ...processStepIds,
+    ...(manifest.initialSubstrateStep ? [manifest.initialSubstrateStep.localId] : []),
+  ]);
+  for (const image of manifest.images) {
+    if (image.assignedStepLocalId !== null && !allowedStepIds.has(image.assignedStepLocalId)) {
+      throw new HTTPException(400, { message: `Image ${image.localId} refers to an unknown process row` });
+    }
   }
   const payloadBytes = workbook.size + manifestFile.size + manifest.images.reduce((sum, image) => {
     const file = form.get(`image:${image.localId}`);
@@ -1976,18 +2232,21 @@ app.post("/imports/fabublox", async (c) => {
 
     const occurrences = new Map<string, number>();
     const definitions = new Map<string, Awaited<ReturnType<typeof hashStepDefinition>>>();
-    const states = new Map<string, Awaited<ReturnType<typeof hashStateRepresentation>>>();
+    const states = new Map<string, { hash: string; canonical: Record<string, unknown> }>();
     const stateAssetRows = new Map<string, [string, string, number]>();
     const initialStateAssets = imageAssets.filter((asset) => manifest.initialStateImageIds.includes(asset.localId));
     let initialStateHash: string | null = null;
-    if (initialStateAssets.length) {
-      const initialState = await hashStateRepresentation(initialStateAssets.map((asset) => asset.sha256));
+    if (manifest.initialSubstrateStep) {
+      const initialState = await hashInitialSubstrateRepresentation(
+        manifest.initialSubstrateStep,
+        initialStateAssets.map((asset) => asset.sha256),
+      );
       states.set(initialState.hash, initialState);
       initialStateHash = initialState.hash;
       initialStateAssets.forEach((asset, index) =>
         stateAssetRows.set(`${initialState.hash}:${asset.assetId}`, [initialState.hash, asset.assetId, index]));
     }
-    let inheritedStateHash: string | null = null;
+    let inheritedStateHash: string | null = initialStateHash;
     const preparedSteps: Array<{
       source: typeof manifest.steps[number]; logicalKey: string; definitionHash: string; expectedStateHash: string | null;
     }> = [];
@@ -2046,7 +2305,7 @@ app.post("/imports/fabublox", async (c) => {
       ...bulkInsertStatements(c.env.DB, "state_representations",
         ["hash", "hash_scheme", "representation_type", "content_json", "created_at"],
         [...states.values()].filter((state) => !existingStateHashes.has(state.hash)).map((state) => [
-          state.hash, STATE_HASH_SCHEME, "diagram", stableJson(state.canonical), now,
+          state.hash, String(state.canonical.schema), String(state.canonical.type), stableJson(state.canonical), now,
         ])),
       ...bulkInsertStatements(c.env.DB, "state_representation_assets",
         ["state_hash", "asset_id", "position"],
@@ -2061,6 +2320,7 @@ app.post("/imports/fabublox", async (c) => {
         source: manifest.source,
         importedTitle: manifest.title,
         objectKind: "process_template",
+        initialSubstrateStep: manifest.initialSubstrateStep,
         warningCount: manifest.warnings.length,
       }), userEmail, now),
       ...bulkInsertStatements(c.env.DB, "template_steps",
@@ -2090,7 +2350,7 @@ app.get("/templates", async (c) => {
   const [result, initialAssetRows] = await Promise.all([
     c.env.DB.prepare(
     `SELECT tv.id, tv.recipe_family_id, tv.name, tv.template_type, tv.version, tv.manifest_hash,
-            tv.initial_state_hash, tv.source_filename, tv.created_at,
+            tv.initial_state_hash, tv.source_filename, tv.content_json, tv.created_at,
             tv.locked_at, tv.archived_at,
             (SELECT COUNT(*) FROM template_steps ts WHERE ts.template_version_id = tv.id) AS step_count
      FROM template_versions tv
@@ -2105,6 +2365,7 @@ app.get("/templates", async (c) => {
     version: number;
     manifest_hash: string;
     initial_state_hash: string | null;
+    content_json: string | null;
     source_filename: string | null;
     created_at: string;
     locked_at: string | null;
@@ -2135,6 +2396,7 @@ app.get("/templates", async (c) => {
     stepCount: Number(row.step_count),
     initialStateHash: row.initial_state_hash,
     initialStateImageKeys: initialAssets.get(row.id) ?? [],
+    initialSubstrateStep: parseInitialSubstrateStep(row.content_json),
     locked: Boolean(row.locked_at),
     lockedAt: row.locked_at,
     createdAt: row.created_at,
@@ -2179,7 +2441,7 @@ app.get("/templates/:id", async (c) => {
   const [template, stepRows, assetRows, initialAssetRows] = await Promise.all([
     c.env.DB.prepare(
       `SELECT id, recipe_family_id, name, template_type, version, manifest_hash, initial_state_hash,
-              source_filename, locked_at, archived_at, created_at
+              source_filename, content_json, locked_at, archived_at, created_at
        FROM template_versions WHERE id = ?`,
     ).bind(id).first<Record<string, unknown>>(),
     c.env.DB.prepare(
@@ -2212,6 +2474,7 @@ app.get("/templates/:id", async (c) => {
     manifestHash: String(template.manifest_hash),
     initialStateHash: template.initial_state_hash ? String(template.initial_state_hash) : null,
     initialStateImageKeys: initialAssetRows.results.map((row) => row.r2_key),
+    initialSubstrateStep: parseInitialSubstrateStep(template.content_json ? String(template.content_json) : null),
     sourceFilename: template.source_filename ? String(template.source_filename) : null,
     locked: Boolean(template.locked_at), lockedAt: template.locked_at ? String(template.locked_at) : null,
     archived: Boolean(template.archived_at), createdAt: String(template.created_at),

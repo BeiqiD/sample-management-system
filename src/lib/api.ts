@@ -1,4 +1,4 @@
-import type { ConfirmRunStepsInput, CreateRecordInput, CreateRunStepCommentsInput, CreateRunStepInput, CreateSampleInput, CreateStateVerificationInput, DeleteSampleInput, FabubloxImportPreview, FinishProcessRunInput, FullExportManifest, PlanUpdatePreview, ProcessingSampleDetail, RunStartPreview, SampleDeletionImpact, SampleDetail, SampleSummary, SplitSampleInput, StartProcessRunInput, StateVerification, UpdateRunStepInput, UpdateSampleInput } from "../../shared/types";
+import type { ApplyPlanUpdateInput, ConfirmRunStepsInput, CreateRecordInput, CreateRunStepCommentsInput, CreateRunStepInput, CreateSampleInput, CreateStateVerificationInput, DeleteSampleInput, FabubloxImportPreview, FinishProcessRunInput, FullExportManifest, PlanUpdatePreview, ProcessingSampleDetail, RunStartPreview, SampleDeletionImpact, SampleDetail, SampleSummary, SplitSampleInput, StartProcessRunInput, StateVerification, UpdateRunStepInput, UpdateSampleInput } from "../../shared/types";
 import { compressLayerStackImage } from "./images";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -63,8 +63,8 @@ export const api = {
   previewPlanUpdate: (sampleId: string, runId: string, templateVersionId: string) => request<PlanUpdatePreview & { familyMismatch?: boolean }>(`/samples/${sampleId}/runs/${runId}/plan-update/preview`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ templateVersionId }),
   }),
-  applyPlanUpdate: (sampleId: string, runId: string, templateVersionId: string, reason = "") => request<{ ok: true; planRevisionId: string; revisionNumber: number }>(`/samples/${sampleId}/runs/${runId}/plan-update`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ templateVersionId, reason }),
+  applyPlanUpdate: (sampleId: string, runId: string, input: ApplyPlanUpdateInput) => request<{ ok: true; planRevisionId: string; revisionNumber: number }>(`/samples/${sampleId}/runs/${runId}/plan-update`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input),
   }),
   updateRunStep: (sampleId: string, runId: string, stepId: string, input: UpdateRunStepInput) => request<{ ok: true }>(`/samples/${sampleId}/runs/${runId}/steps/${stepId}`, {
     method: "PATCH",
@@ -146,6 +146,7 @@ export interface TemplateRecord {
   stepCount: number;
   initialStateHash: string | null;
   initialStateImageKeys: string[];
+  initialSubstrateStep: FabubloxImportPreview["initialSubstrateStep"];
   locked: boolean;
   lockedAt: string | null;
   createdAt: string;

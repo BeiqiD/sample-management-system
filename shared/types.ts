@@ -178,12 +178,17 @@ export interface SampleRun {
 export interface RunStartPreview {
   successor: boolean;
   sampleUpdatedAt: string;
+  expectedLatestRunId: string | null;
+  comparison: "same" | "different" | "no_previous_structure" | "not_comparable";
+  canConfirm: boolean;
+  blockingReason: string | null;
   template: {
     id: string;
     name: string;
     version: number;
     initialStateHash: string | null;
     initialStateImageKeys: string[];
+    initialSubstrateStep: InitialSubstrateStep | null;
   };
   sampleCurrentState: {
     hash: string | null;
@@ -192,10 +197,18 @@ export interface RunStartPreview {
   };
 }
 
+export interface SubstrateTransitionConfirmation {
+  confirmed: true;
+  expectedSampleUpdatedAt: string;
+  expectedPreviousStateHash: string | null;
+  expectedTemplateInitialStateHash: string | null;
+  expectedLatestRunId: string | null;
+  expectedCurrentPlanRevisionId?: string;
+}
+
 export interface StartProcessRunInput {
   templateVersionId: string;
-  initialStateHash?: string | null;
-  expectedSampleUpdatedAt?: string;
+  substrateConfirmation?: SubstrateTransitionConfirmation;
 }
 
 export interface FinishProcessRunInput {
@@ -204,8 +217,11 @@ export interface FinishProcessRunInput {
 
 export interface PlanUpdatePreview {
   compatible: boolean;
+  blockingReason: string | null;
   currentTemplateVersionId: string;
   nextTemplateVersionId: string;
+  canReopen: boolean;
+  substrateTransition: RunStartPreview;
   preservedCount: number;
   additionCount: number;
   supersededCount: number;
@@ -219,6 +235,12 @@ export interface PlanUpdatePreview {
     existingStepId: string;
     templateStepId?: string;
   }>;
+}
+
+export interface ApplyPlanUpdateInput {
+  templateVersionId: string;
+  reason?: string;
+  substrateConfirmation: SubstrateTransitionConfirmation;
 }
 
 export interface CreateStateVerificationInput {
@@ -309,6 +331,8 @@ export interface FabubloxStep {
   rawCells: Record<string, unknown>;
 }
 
+export type InitialSubstrateStep = FabubloxStep;
+
 interface FabubloxImage {
   localId: string;
   sourcePart: string;
@@ -335,7 +359,7 @@ export interface ImportWarning {
 }
 
 export interface FabubloxImportPreview {
-  schemaVersion: 1;
+  schemaVersion: 2;
   title: string;
   source: {
     fileName: string;
@@ -347,6 +371,7 @@ export interface FabubloxImportPreview {
     layerStackColumn: number | null;
   };
   sections: FabubloxSection[];
+  initialSubstrateStep: InitialSubstrateStep | null;
   steps: FabubloxStep[];
   images: ParsedFabubloxImage[];
   initialStateImageIds: string[];

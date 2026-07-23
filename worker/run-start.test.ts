@@ -1,57 +1,72 @@
 import { describe, expect, it } from "vitest";
-import { resolveRunInitialState } from "./run-start";
+import { validateSubstrateTransition } from "./run-start";
 
-describe("process-run initial substrate confirmation", () => {
-  it("uses the process-template start automatically for the first run", () => {
-    expect(resolveRunInitialState({
-      hasPreviousRun: false,
-      requestedHashProvided: false,
-      requestedHash: null,
-      templateHash: "template-state",
-      sampleCurrentHash: null,
-    })).toEqual({ ok: true, hash: "template-state" });
-  });
+const facts = {
+  sampleUpdatedAt: "2026-07-23T12:00:00.000Z",
+  previousStateHash: "previous-state",
+  templateInitialStateHash: "template-step-zero",
+  latestRunId: "run-1",
+  currentPlanRevisionId: "revision-3",
+};
 
-  it("requires an explicit choice for an additional run", () => {
-    expect(resolveRunInitialState({
-      hasPreviousRun: true,
-      requestedHashProvided: false,
-      requestedHash: null,
-      templateHash: "template-state",
-      sampleCurrentHash: "sample-state",
+const confirmation = {
+  confirmed: true as const,
+  expectedSampleUpdatedAt: facts.sampleUpdatedAt,
+  expectedPreviousStateHash: facts.previousStateHash,
+  expectedTemplateInitialStateHash: facts.templateInitialStateHash,
+  expectedLatestRunId: facts.latestRunId,
+  expectedCurrentPlanRevisionId: facts.currentPlanRevisionId,
+};
+
+describe("substrate transition confirmation", () => {
+  it("requires explicit confirmation even when this is the first run", () => {
+    expect(validateSubstrateTransition(undefined, {
+      ...facts,
+      previousStateHash: null,
+      latestRunId: null,
+      currentPlanRevisionId: undefined,
     })).toEqual({ ok: false, reason: "confirmation_required" });
   });
 
-  it("also requires confirmation for a split child with an inherited substrate", () => {
-    expect(resolveRunInitialState({
-      hasPreviousRun: false,
-      requestedHashProvided: false,
-      requestedHash: null,
-      templateHash: "template-state",
-      sampleCurrentHash: "inherited-parent-state",
-    })).toEqual({ ok: false, reason: "confirmation_required" });
+  it("accepts a reviewed first-run handoff with no previous structure", () => {
+    expect(validateSubstrateTransition({
+      ...confirmation,
+      expectedPreviousStateHash: null,
+      expectedLatestRunId: null,
+      expectedCurrentPlanRevisionId: undefined,
+    }, {
+      ...facts,
+      previousStateHash: null,
+      latestRunId: null,
+      currentPlanRevisionId: undefined,
+    })).toEqual({ ok: true, initialStateHash: "template-step-zero" });
   });
 
-  it("accepts either displayed structure and rejects an unrelated hash or an empty choice", () => {
-    const base = {
-      hasPreviousRun: true,
-      requestedHashProvided: true,
-      templateHash: "template-state",
-      sampleCurrentHash: "sample-state",
-    };
-    expect(resolveRunInitialState({ ...base, requestedHash: "template-state" })).toEqual({ ok: true, hash: "template-state" });
-    expect(resolveRunInitialState({ ...base, requestedHash: "sample-state" })).toEqual({ ok: true, hash: "sample-state" });
-    expect(resolveRunInitialState({ ...base, requestedHash: "other" })).toEqual({ ok: false, reason: "invalid_choice" });
-    expect(resolveRunInitialState({ ...base, requestedHash: null })).toEqual({ ok: false, reason: "invalid_choice" });
+  it("records Step 0 as the immutable run start instead of selecting either side", () => {
+    expect(validateSubstrateTransition(confirmation, facts)).toEqual({
+      ok: true,
+      initialStateHash: "template-step-zero",
+    });
   });
 
-  it("allows a confirmed empty structure only when neither source has a diagram", () => {
-    expect(resolveRunInitialState({
-      hasPreviousRun: true,
-      requestedHashProvided: true,
-      requestedHash: null,
-      templateHash: null,
-      sampleCurrentHash: null,
-    })).toEqual({ ok: true, hash: null });
+  it("rejects a transition when the template has no Step 0 snapshot", () => {
+    expect(validateSubstrateTransition({
+      ...confirmation,
+      expectedTemplateInitialStateHash: null,
+    }, {
+      ...facts,
+      templateInitialStateHash: null,
+    })).toEqual({ ok: false, reason: "template_initial_state_missing" });
+  });
+
+  it.each([
+    ["sample revision", { expectedSampleUpdatedAt: "later" }],
+    ["previous structure", { expectedPreviousStateHash: "changed" }],
+    ["Step 0", { expectedTemplateInitialStateHash: "changed" }],
+    ["latest run", { expectedLatestRunId: "run-2" }],
+    ["plan revision", { expectedCurrentPlanRevisionId: "revision-4" }],
+  ])("rejects stale confirmation when the %s changed", (_label, change) => {
+    expect(validateSubstrateTransition({ ...confirmation, ...change }, facts))
+      .toEqual({ ok: false, reason: "stale_confirmation" });
   });
 });
