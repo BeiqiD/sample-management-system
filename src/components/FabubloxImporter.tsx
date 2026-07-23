@@ -54,10 +54,11 @@ export function FabubloxImporter({ templates, onImported }: FabubloxImporterProp
   }
 
   return <section className="template-import-section">
-    <div>
-      <p className="eyebrow">Import</p>
-      <h2>FabuBlox workbook</h2>
-      <p className="muted">Create a new process template or import the workbook directly as the next version of an existing one. Nothing is uploaded before confirmation.</p>
+    <div className="section-heading import-section-heading">
+      <div>
+        <h2>Import FabuBlox workbook</h2>
+        <p className="muted">Create a new process template or import the workbook directly as the next version of an existing one. Nothing is uploaded before confirmation.</p>
+      </div>
     </div>
     <FileDropzone accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" file={file} onFile={(nextFile) => void choose(nextFile)} label={busy && !preview ? "Inspecting workbook…" : "Drop a FabuBlox .xlsx workbook"} hint="Cell values, drawing relationships, anchor rows, and embedded layer-stack diagrams are inspected in the browser." />
     {error && <p className="error-banner">{error}</p>}
@@ -74,10 +75,10 @@ export function FabubloxImporter({ templates, onImported }: FabubloxImporterProp
         <label>Version relationship<select value={recipeFamilyId} onChange={(event) => { const id = event.target.value; setRecipeFamilyId(id); const family = families.find((candidate) => candidate.recipeFamilyId === id); if (family) setPreview({ ...preview, title: family.name }); }}><option value="">New process template</option>{families.map((family) => <option key={family.recipeFamilyId} value={family.recipeFamilyId}>New version of {family.name}</option>)}</select><small>{recipeFamilyId ? "The imported workbook becomes the next immutable version immediately." : "Creates a distinct process-template family."}</small></label>
       </div>
       <section className={`card initial-state-preview${preview.initialSubstrateStep ? "" : " missing-initial-state"}`}>
-        <div>
-          <p className="eyebrow">Initial substrate · Step 0</p>
-          <h2>{preview.initialSubstrateStep ? "Substrate Stack" : "Substrate Stack was not found"}</h2>
-          {preview.initialSubstrateStep ? <SubstrateStepDetails step={preview.initialSubstrateStep} /> : <p className="muted">The importer will not borrow a diagram from Step 1. This template cannot start or update a run until it is re-imported with Step 0.</p>}
+        <div className="card-copy">
+          <div className="card-title-line"><h3 className="card-title">Initial substrate</h3><span className="meta-badge">Step 0</span></div>
+          <p className="card-value">{preview.initialSubstrateStep ? "Substrate Stack" : "Substrate Stack was not found"}</p>
+          {preview.initialSubstrateStep ? <SubstrateStepDetails step={preview.initialSubstrateStep} /> : <p className="card-meta">The importer will not borrow a diagram from Step 1. This template cannot start or update a run until it is re-imported with Step 0.</p>}
         </div>
         <div className="initial-state-preview-images">
           {preview.initialStateImageIds.length
@@ -89,7 +90,7 @@ export function FabubloxImporter({ templates, onImported }: FabubloxImporterProp
       <section className="step-preview-list">
         {preview.steps.map((step) => <article className="card imported-step" key={step.localId}>
           <div className="step-position">{step.stepNumber ?? step.position + 1}</div>
-          <div className="step-copy"><h2>{step.name}</h2>{step.sectionName && <span className="section-label">{step.sectionName}</span>}<dl><dt>Tool</dt><dd>{step.toolName || "—"}</dd><dt>Parameters</dt><dd className="preline">{step.parametersText || "—"}</dd><dt>Comments</dt><dd className="preline">{step.commentsText || "—"}</dd></dl></div>
+          <div className="step-copy"><h3 className="card-title">{step.name}</h3>{step.sectionName && <span className="section-label">{step.sectionName}</span>}<dl><dt>Tool</dt><dd>{step.toolName || "—"}</dd><dt>Parameters</dt><dd className="preline">{step.parametersText || "—"}</dd><dt>Comments</dt><dd className="preline">{step.commentsText || "—"}</dd></dl></div>
           <LayerThumbnail image={step.imageIds[0] ? images.get(step.imageIds[0]) : undefined} alt={`Layer stack for ${step.name}`} />
         </article>)}
       </section>
