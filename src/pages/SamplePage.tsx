@@ -1,16 +1,17 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { isSampleRecordEvent } from "../../shared/sample-records";
 import { SAMPLE_STATUSES, SAMPLE_STATUS_LABELS, type SampleDetail, type SampleEvent, type SampleRun, type SampleStatus } from "../../shared/types";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { FileDropzone } from "../components/FileDropzone";
 import { SampleStateThumbnail } from "../components/SampleStateThumbnail";
+import { SampleTimeline } from "../components/SampleTimeline";
 import { SplitSampleDialog } from "../components/SplitSampleDialog";
 import { StatusPill } from "../components/StatusPill";
 import { api } from "../lib/api";
 import { exportSample } from "../lib/exportSample";
 import { compressCommentImage } from "../lib/images";
-import { SAMPLE_HISTORY_PREVIEW_COUNT, visibleSampleHistory } from "../lib/sampleHistory";
+import { SAMPLE_HISTORY_PREVIEW_COUNT } from "../lib/sampleHistory";
+import { collectSampleNotes } from "../lib/sampleNotes";
 
 function runProgress(run: SampleRun) {
   const currentSteps = run.steps.filter((step) => step.planStatus === "current");
@@ -62,7 +63,6 @@ export function SamplePage() {
   const [assetToDelete, setAssetToDelete] = useState<SampleEvent | null>(null);
   const [assetDeleteError, setAssetDeleteError] = useState("");
   const [deletingAsset, setDeletingAsset] = useState(false);
-  const [historyExpanded, setHistoryExpanded] = useState(false);
   const [splitting, setSplitting] = useState(false);
   const [confirmingSampleDeletion, setConfirmingSampleDeletion] = useState(false);
   const [sampleDeleteConfirmation, setSampleDeleteConfirmation] = useState("");
@@ -78,7 +78,6 @@ export function SamplePage() {
   }, [sampleId]);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { setHistoryExpanded(false); }, [sampleId]);
 
   async function addComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -177,43 +176,80 @@ export function SamplePage() {
 
   if (!sample) return <div className="page"><p>{error || "Loading sample…"}</p></div>;
   const activeRun = sample.runs.find((run) => run.status === "active") ?? null;
-  const visibleEvents = visibleSampleHistory(sample.events, historyExpanded);
-  const hiddenEventCount = sample.events.length - visibleEvents.length;
+  const latestRun = sample.runs[0] ?? null;
+  const notes = collectSampleNotes(sample);
+  const recentEvents = sample.events.slice(0, SAMPLE_HISTORY_PREVIEW_COUNT);
 
   return <div className="page sample-overview-page">
     <Link className="back-link" to="/samples">← Samples</Link>
     <div className="sample-header">
       <div className="sample-header-copy"><p className="eyebrow">{sample.code}</p><h1>{sample.title}</h1><p className="lead">{sample.description || "No description"}</p></div>
-      <div className="header-actions"><StatusPill status={sample.status} /><Link className="button primary" to={`/processing/${sample.id}${activeRun ? `?run=${encodeURIComponent(activeRun.id)}` : "?action=start"}`}>{activeRun ? "Continue processing" : sample.runs.length ? "Start new run" : "Start first run"}</Link><a className="button" href="#sample-record">Add record</a><button className="button" onClick={() => setSplitting(true)}>Split sample</button><button className="button" disabled={exporting} onClick={() => {
+      <div className="header-actions"><StatusPill status={sample.status} /><Link className="button primary" to={`/processing/${sample.id}${activeRun ? `?run=${encodeURIComponent(activeRun.id)}` : "?action=start"}`}>{activeRun ? "Continue processing" : sample.runs.length ? "Start new run" : "Start first run"}</Link><a className="button" href="#sample-notes">Add note</a><button className="button" onClick={() => setSplitting(true)}>Split sample</button><button className="button" disabled={exporting} onClick={() => {
         setExporting(true);
         void exportSample(sample).catch((error: Error) => setError(error.message)).finally(() => setExporting(false));
       }}>{exporting ? "Exporting…" : "Export ZIP"}</button></div>
     </div>
 
     {error && <p className="error-banner">{error}</p>}
-    <div className="sample-overview-grid">
-      <aside className="card facts sample-details-card">
-        <div className="card-title-row"><h2 className="card-title">Sample details</h2><button className="text-button" onClick={() => setEditingDetails((value) => !value)}>{editingDetails ? "Cancel" : "Edit"}</button></div>
-        {editingDetails ? <form className="detail-form" onSubmit={updateDetails}>
-          <label>Sample code<input value={sample.code} readOnly aria-readonly="true" title="Sample code is a permanent identifier" /></label>
-          <label>Sample name<input name="title" defaultValue={sample.title} required maxLength={200} /></label>
-          <label>Status<select name="status" defaultValue={sample.status}>{SAMPLE_STATUSES.map((status) => <option value={status} key={status}>{SAMPLE_STATUS_LABELS[status]}</option>)}</select></label>
-          <label>Location<input name="location" defaultValue={sample.location || ""} placeholder="Box, lab, or tool" /></label>
-          <label className="checkbox-label"><input name="pinned" type="checkbox" defaultChecked={sample.pinned} />Pinned</label>
-          <button className="button primary wide" disabled={updatingDetails}>{updatingDetails ? "Saving…" : "Save changes"}</button>
-        </form> : <dl><dt>Sample code</dt><dd>{sample.code}</dd><dt>Sample name</dt><dd>{sample.title}</dd><dt>Status</dt><dd>{sample.status}</dd><dt>Location</dt><dd>{sample.location || "—"}</dd><dt>Pinned</dt><dd>{sample.pinned ? "Yes" : "No"}</dd><dt>Parent</dt><dd>{sample.parent ? <Link to={`/samples/${sample.parent.id}`}>{sample.parent.code}</Link> : "—"}</dd><dt>Children</dt><dd>{sample.children.length ? sample.children.map((child) => <Link key={child.id} to={`/samples/${child.id}`}>{child.code}</Link>) : "—"}</dd><dt>Created</dt><dd>{new Date(sample.createdAt).toLocaleString()}</dd></dl>}
-        {!editingDetails && <div className="sample-danger-zone"><div><strong>Delete sample</strong><small>Remove this sample and its processing history.</small></div><button type="button" className="button danger" onClick={() => { setSampleDeleteConfirmation(""); setSampleDeleteError(""); setConfirmingSampleDeletion(true); }}>Delete</button></div>}
-      </aside>
+    <section className="sample-priority-grid">
+      <div className="sample-priority-sidebar">
+        <aside className="card facts sample-details-card">
+          <div className="card-title-row"><h2 className="card-title">Sample details</h2><button className="text-button" onClick={() => setEditingDetails((value) => !value)}>{editingDetails ? "Cancel" : "Edit"}</button></div>
+          {editingDetails ? <form className="detail-form" onSubmit={updateDetails}>
+            <label>Sample code<input value={sample.code} readOnly aria-readonly="true" title="Sample code is a permanent identifier" /></label>
+            <label>Sample name<input name="title" defaultValue={sample.title} required maxLength={200} /></label>
+            <label>Status<select name="status" defaultValue={sample.status}>{SAMPLE_STATUSES.map((status) => <option value={status} key={status}>{SAMPLE_STATUS_LABELS[status]}</option>)}</select></label>
+            <label>Location<input name="location" defaultValue={sample.location || ""} placeholder="Box, lab, or tool" /></label>
+            <label className="checkbox-label"><input name="pinned" type="checkbox" defaultChecked={sample.pinned} />Pinned</label>
+            <button className="button primary wide" disabled={updatingDetails}>{updatingDetails ? "Saving…" : "Save changes"}</button>
+          </form> : <dl><dt>Location</dt><dd className="sample-location-value">{sample.location || "—"}</dd><dt>Sample code</dt><dd>{sample.code}</dd><dt>Sample name</dt><dd>{sample.title}</dd><dt>Status</dt><dd>{SAMPLE_STATUS_LABELS[sample.status]}</dd><dt>Pinned</dt><dd>{sample.pinned ? "Yes" : "No"}</dd><dt>Parent</dt><dd>{sample.parent ? <Link to={`/samples/${sample.parent.id}`}>{sample.parent.code}</Link> : "—"}</dd><dt>Children</dt><dd>{sample.children.length ? sample.children.map((child) => <Link key={child.id} to={`/samples/${child.id}`}>{child.code}</Link>) : "—"}</dd><dt>Created</dt><dd>{new Date(sample.createdAt).toLocaleString()}</dd></dl>}
+          {!editingDetails && <div className="sample-danger-zone"><div><strong>Delete sample</strong><small>Remove this sample and its processing history.</small></div><button type="button" className="button danger" onClick={() => { setSampleDeleteConfirmation(""); setSampleDeleteError(""); setConfirmingSampleDeletion(true); }}>Delete</button></div>}
+        </aside>
 
-      <section className="sample-runs-section">
         <article className="card sample-current-structure">
           <div className="card-copy">
             <h2 className="card-title">Current structure</h2>
             <p className="card-value">{sample.currentStateStepTitle ? `After ${sample.currentStateStepTitle}` : sample.latestWorkflowName ? "Latest recorded substrate" : "No process structure yet"}</p>
             <p className="card-meta">{sample.latestWorkflowName ? `${sample.latestWorkflowName}${sample.latestWorkflowVersion ? ` · v${sample.latestWorkflowVersion}` : ""}` : "Start a process run to establish the first substrate snapshot."}</p>
+            {latestRun && <Link className="text-button structure-source-link" to={`/processing/${sample.id}?run=${encodeURIComponent(latestRun.id)}`}>Open source run</Link>}
           </div>
           <SampleStateThumbnail sample={sample} />
         </article>
+      </div>
+
+      <section className="card sample-notes-card" id="sample-notes">
+        <div className="section-heading sample-notes-heading">
+          <div><h2>Notes &amp; observations</h2><p>Important comments, observations, and exceptions from this sample and its processing runs.</p></div>
+          <span className="section-count">{notes.length}</span>
+        </div>
+        <form className="note-composer" onSubmit={addComment}>
+          <label>Add a note or observation<textarea name="body" rows={3} placeholder="Observation about this sample, independent of a process step…" /></label>
+          <FileDropzone compact accept="image/*" capture="environment" file={commentImage} onFile={(file) => { pendingUploadRef.current = null; setCommentImage(file); }} label="Drop a sample-level photo" />
+          <div className="composer-actions"><span className="muted">Saved directly to this sample.</span><button className="button primary" disabled={saving}>{saving ? "Saving…" : "Add note"}</button></div>
+        </form>
+        {notes.length ? <div className="sample-notes-list">{notes.map((note) => <article className={`sample-note sample-note-${note.kind}`} key={note.id}>
+          <div className="sample-note-heading">
+            <div><p className="card-label">{note.label}</p><p className="sample-note-context">{note.context}</p></div>
+            <time>{new Date(note.createdAt).toLocaleString()}</time>
+          </div>
+          <div className="sample-note-content">
+            <p>{note.body}</p>
+            {note.assetKey && <a className="sample-note-image" href={`/api/assets/${note.assetKey}`} target="_blank" rel="noreferrer"><img src={`/api/assets/${note.thumbnailKey || note.assetKey}`} alt={note.body || note.label} loading="lazy" /></a>}
+          </div>
+          <div className="sample-note-footer">
+            <span>{note.actorEmail || (note.kind === "execution_detail" || note.kind === "deviation" || note.kind === "blocked_step" ? "Current process state" : "Unknown user")}</span>
+            <div>
+              {note.runId && <Link className="text-button" to={`/processing/${sample.id}?run=${encodeURIComponent(note.runId)}`}>Open in processing</Link>}
+              {note.sampleEvent?.assetKey && <button type="button" className="text-button" onClick={() => { setAssetDeleteError(""); setAssetToDelete(note.sampleEvent); }}>Delete image</button>}
+              {note.sampleEvent && <button type="button" className="text-button danger-text-button" onClick={() => { setRecordDeleteError(""); setRecordToDelete(note.sampleEvent); }}>Delete note</button>}
+            </div>
+          </div>
+        </article>)}</div> : <div className="notes-empty"><p>No notes or exceptions have been recorded yet.</p><span>Normal processing activity remains available in the Timeline.</span></div>}
+      </section>
+    </section>
+
+    <section className="sample-secondary-grid">
+      <section className="sample-runs-section">
         <div className="section-heading"><div><h2>Process runs</h2><p>The ordered processing history for this sample.</p></div><span className="section-count">{sample.runs.length}</span></div>
         {sample.runs.length ? <div className="sample-run-list">{sample.runs.map((run) => {
           const progress = runProgress(run);
@@ -237,27 +273,19 @@ export function SamplePage() {
           </details>;
         })}</div> : <div className="card empty-run-message"><h3 className="card-title">No process runs</h3><p>Open Processing to choose a process template and start the first run.</p></div>}
       </section>
-    </div>
 
-    <section className="sample-record-section" id="sample-record">
-      <div className="section-heading sample-record-heading"><div><h2>Sample timeline</h2><p>Permanent sample-level records and audit history.</p></div></div>
-      <form className="card composer" onSubmit={addComment}>
-        <label>Add a sample record<textarea name="body" rows={3} placeholder="Overall observation about this sample, independent of any process step…" /></label>
-        <FileDropzone compact accept="image/*" capture="environment" file={commentImage} onFile={(file) => { pendingUploadRef.current = null; setCommentImage(file); }} label="Drop a sample-level photo" />
-        <div className="composer-actions"><span className="muted">This belongs to the sample archive, not a processing step.</span><button className="button primary" disabled={saving}>{saving ? "Saving…" : "Add record"}</button></div>
-      </form>
-      {sample.events.length > SAMPLE_HISTORY_PREVIEW_COUNT && <div className="timeline-toolbar">
-        <span>{historyExpanded ? `All ${sample.events.length} entries` : `Latest ${visibleEvents.length} of ${sample.events.length} entries`}</span>
-        <button type="button" className="text-button" aria-expanded={historyExpanded} aria-controls="sample-history" onClick={() => setHistoryExpanded((value) => !value)}>{historyExpanded ? `Show latest ${SAMPLE_HISTORY_PREVIEW_COUNT}` : `Show ${hiddenEventCount} older`}</button>
-      </div>}
-      <div className="timeline" id="sample-history">
-        {visibleEvents.map((event) => <article className={`event${event.metadata.deletedAt ? " deleted-event" : ""}`} key={event.id}>
-          <div className="event-dot" />
-          <div className="event-content"><div className="event-meta"><span>{event.kind}{event.metadata.deletedAt ? " · deleted" : ""}{event.actorEmail ? ` · ${event.actorEmail}` : ""}</span><div><time>{new Date(event.createdAt).toLocaleString()}</time>{event.assetKey && <button type="button" onClick={() => { setAssetDeleteError(""); setAssetToDelete(event); }}>Delete image</button>}{isSampleRecordEvent(event.kind, event.metadata) && <button type="button" onClick={() => { setRecordDeleteError(""); setRecordToDelete(event); }}>Delete record</button>}</div></div>{event.body && <p>{event.body}</p>}{event.assetKey && <div className="event-asset"><a href={`/api/assets/${event.assetKey}`} target="_blank" rel="noreferrer"><img src={`/api/assets/${typeof event.metadata.thumbnailKey === "string" ? event.metadata.thumbnailKey : event.assetKey}`} alt={event.body || "Sample record"} loading="lazy" /></a></div>}</div>
-        </article>)}
-      </div>
+      <section className="sample-recent-timeline">
+        <div className="section-heading">
+          <div><h2>Recent timeline</h2><p>The latest audit events, including normal activity.</p></div>
+          <span className="section-count">{sample.events.length}</span>
+        </div>
+        <div className="card recent-timeline-card">
+          <SampleTimeline events={recentEvents} compact />
+          <Link className="button wide" to={`/samples/${sample.id}/timeline`}>View full timeline</Link>
+        </div>
+      </section>
     </section>
-    {recordToDelete && <ConfirmDeleteDialog title="Delete this sample record?" description="The record will disappear from the current view, while the Timeline will retain an audit entry." summary={recordToDelete.body?.trim() || (recordToDelete.assetKey ? "Photo record" : "Empty record")} deleting={deletingRecord} error={recordDeleteError} eyebrow="Delete record" confirmLabel="Delete record" onCancel={() => { setRecordToDelete(null); setRecordDeleteError(""); }} onConfirm={() => void deleteRecord()} />}
+    {recordToDelete && <ConfirmDeleteDialog title="Delete this sample note?" description="The note will disappear from Notes & observations, while the Timeline will retain a deletion audit entry." summary={recordToDelete.body?.trim() || (recordToDelete.assetKey ? "Photo observation" : "Empty note")} deleting={deletingRecord} error={recordDeleteError} eyebrow="Delete note" confirmLabel="Delete note" onCancel={() => { setRecordToDelete(null); setRecordDeleteError(""); }} onConfirm={() => void deleteRecord()} />}
     {assetToDelete && <ConfirmDeleteDialog title="Delete this image attachment?" description="The image will be detached from the record. The Timeline will retain a text-only audit entry showing that an image was removed." summary={assetToDelete.body?.trim() || "Image attachment"} deleting={deletingAsset} error={assetDeleteError} eyebrow="Delete image" confirmLabel="Delete image" onCancel={() => { setAssetToDelete(null); setAssetDeleteError(""); }} onConfirm={() => void deleteAsset()} />}
     {confirmingSampleDeletion && <ConfirmDeleteDialog
       title={`Delete ${sample.code}?`}

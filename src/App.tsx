@@ -8,6 +8,7 @@ import { ExportPage } from "./pages/ExportPage";
 import { TemplatePage } from "./pages/TemplatePage";
 import { ProcessingPage } from "./pages/ProcessingPage";
 import { ProcessingWorkspacePage } from "./pages/ProcessingWorkspacePage";
+import { SampleTimelinePage } from "./pages/SampleTimelinePage";
 import { NavigationIcon, type NavigationIconName } from "./components/NavigationIcon";
 
 const primaryNavigation: Array<{ to: string; label: string; icon: NavigationIconName }> = [
@@ -62,6 +63,7 @@ export function App() {
           <Route path="/processing/:sampleId" element={<ProcessingWorkspacePage />} />
           <Route path="/samples" element={<SamplesPage />} />
           <Route path="/samples/new" element={<NewSamplePage />} />
+          <Route path="/samples/:sampleId/timeline" element={<SampleTimelinePage />} />
           <Route path="/samples/:sampleId" element={<SamplePage />} />
           <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/templates/:templateId" element={<TemplatePage />} />
