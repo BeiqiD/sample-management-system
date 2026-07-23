@@ -204,7 +204,7 @@ Confirm the active Cloudflare account and every binding before applying remote m
 
 ## Security checklist
 
-- No credentials, account identifiers, resource IDs, or deployment hostnames are committed to Git.
+- No credentials are committed to Git. A fork replaces every inherited account identifier, resource ID, and deployment hostname before its first build.
 - The complete application hostname is covered by Access.
 - The Worker validates the Access JWT issuer and audience.
 - Sensitive runtime values are encrypted Worker secrets.
