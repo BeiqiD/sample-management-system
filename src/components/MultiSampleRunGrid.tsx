@@ -221,7 +221,7 @@ function RecipeDetailsSheet({ state, onClose }: { state: NonNullable<RecipeDetai
     <section className="recipe-details-sheet" role="dialog" aria-modal="true" aria-labelledby="recipe-details-title">
       <div className="recipe-details-handle" aria-hidden="true" />
       <div className="recipe-details-heading">
-        <div><p className="eyebrow">Process step {number}</p><h2 id="recipe-details-title">{step.plannedTitle || step.title}</h2>{step.plannedToolName && <small>{step.plannedToolName}</small>}</div>
+        <div><p className="dialog-kicker">Process step {number}</p><h2 id="recipe-details-title">{step.plannedTitle || step.title}</h2>{step.plannedToolName && <small>{step.plannedToolName}</small>}</div>
         <button ref={closeButtonRef} type="button" className="drawer-close" onClick={onClose} aria-label="Close process-step details">×</button>
       </div>
       <div className={`recipe-details-content${hasPlannedCopy && hasPlannedDiagrams ? " has-diagrams" : ""}`}>
@@ -339,7 +339,7 @@ function StepDrawer({ state, onClose, onSaved }: { state: Exclude<DrawerState, n
 
   return <div className="step-drawer-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <aside className="step-drawer" role="dialog" aria-modal="true" aria-labelledby="step-drawer-title">
-      <div className="step-drawer-heading"><div><p className="eyebrow">{state.column.sample.code}</p><h2 id="step-drawer-title">{editing ? "Correct execution" : "Add an individual step"}</h2></div><button type="button" className="drawer-close" aria-label="Close" onClick={onClose}>×</button></div>
+      <div className="step-drawer-heading"><div><p className="dialog-kicker">{state.column.sample.code}</p><h2 id="step-drawer-title">{editing ? "Correct execution" : "Add an individual step"}</h2></div><button type="button" className="drawer-close" aria-label="Close" onClick={onClose}>×</button></div>
       <p className="muted">{editing ? "Record what actually happened. The process plan stays unchanged." : "This step belongs only to this sample run."}</p>
       <form className="drawer-form" onSubmit={save}>
         {isTemplateStep ? <div className="locked-step-title"><small>Process step</small><strong>{step?.plannedTitle || step?.title}</strong></div> : <label>Step name<input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></label>}
@@ -552,7 +552,7 @@ export function MultiSampleRunGrid({ columns, primaryRun, onSaved, readOnly = fa
   const layoutClass = `sample-count-${Math.min(columns.length, 4)}`;
   return <article className={`run-grid-card ${layoutClass}`} ref={card}>
     <div className="run-grid-toolbar">
-      <div><p className="eyebrow">{primaryRun.templateType} · run {primaryRun.sequenceNo} · plan r{primaryRun.planRevisionNumber}</p><h2>{primaryRun.templateName} v{primaryRun.templateVersion}</h2><small>{primaryRun.status === "active" ? "Plan on the left; actual execution stays in each sample column." : `${primaryRun.status} run · preserved in the sample chain`}</small></div>
+      <div><p className="card-label">{primaryRun.templateType} · run {primaryRun.sequenceNo} · plan r{primaryRun.planRevisionNumber}</p><h3 className="card-title">{primaryRun.templateName} v{primaryRun.templateVersion}</h3><small>{primaryRun.status === "active" ? "Plan on the left; actual execution stays in each sample column." : `${primaryRun.status} run · preserved in the sample chain`}</small></div>
       <div className="grid-scroll-buttons" aria-label="Sample columns">{scrollState.overflow && <button type="button" disabled={!scrollState.left} onClick={() => scrollColumns(-1)} aria-label="Scroll sample columns left">←</button>}<span>{columns.length} sample{columns.length === 1 ? "" : "s"}</span>{scrollState.overflow && <button type="button" disabled={!scrollState.right} onClick={() => scrollColumns(1)} aria-label="Scroll sample columns right">→</button>}</div>
     </div>
     {error && <p className="error-banner grid-error">{error}</p>}

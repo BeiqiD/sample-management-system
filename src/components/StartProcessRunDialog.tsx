@@ -41,7 +41,7 @@ export function StartProcessRunDialog({ preview, action, starting, error, onCanc
   }}>
     <section className="run-start-dialog" role="dialog" aria-modal="true" aria-labelledby="run-start-title">
       <div className="run-start-dialog-heading">
-        <div><p className="eyebrow">{actionLabel}</p><h2 id="run-start-title">Does this structure handoff match what you expect?</h2></div>
+        <div><p className="dialog-kicker">{actionLabel}</p><h2 id="run-start-title">Does this structure handoff match what you expect?</h2></div>
         <button type="button" className="drawer-close" disabled={starting} onClick={onCancel} aria-label="Close">×</button>
       </div>
       <p className="muted">Compare the last structure recorded on the sample with Step 0 of the incoming process template. Confirmation records that this transition is intentional; it does not choose between the two structures.</p>

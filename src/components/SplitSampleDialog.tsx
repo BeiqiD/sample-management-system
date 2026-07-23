@@ -87,7 +87,7 @@ export function SplitSampleDialog({ sample, onCancel, onComplete }: {
   return <div className="split-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onCancel(); }}>
     <section className="split-dialog" role="dialog" aria-modal="true" aria-labelledby="split-dialog-title">
       <div className="split-dialog-heading">
-        <div><p className="eyebrow">Split sample</p><h2 id="split-dialog-title">{sample.code} · {sample.title}</h2></div>
+        <div><p className="dialog-kicker">Split sample</p><h2 id="split-dialog-title">{sample.code} · {sample.title}</h2></div>
         <button type="button" className="drawer-close" aria-label="Close split dialog" disabled={saving} onClick={onCancel}>×</button>
       </div>
 

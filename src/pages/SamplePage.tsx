@@ -193,7 +193,7 @@ export function SamplePage() {
     {error && <p className="error-banner">{error}</p>}
     <div className="sample-overview-grid">
       <aside className="card facts sample-details-card">
-        <div className="card-title-row"><h2>Sample details</h2><button className="text-button" onClick={() => setEditingDetails((value) => !value)}>{editingDetails ? "Cancel" : "Edit"}</button></div>
+        <div className="card-title-row"><h2 className="card-title">Sample details</h2><button className="text-button" onClick={() => setEditingDetails((value) => !value)}>{editingDetails ? "Cancel" : "Edit"}</button></div>
         {editingDetails ? <form className="detail-form" onSubmit={updateDetails}>
           <label>Sample code<input value={sample.code} readOnly aria-readonly="true" title="Sample code is a permanent identifier" /></label>
           <label>Sample name<input name="title" defaultValue={sample.title} required maxLength={200} /></label>
@@ -207,16 +207,23 @@ export function SamplePage() {
 
       <section className="sample-runs-section">
         <article className="card sample-current-structure">
-          <div><p className="eyebrow">Current structure</p><h2>{sample.currentStateStepTitle ? `After ${sample.currentStateStepTitle}` : sample.latestWorkflowName ? "Latest recorded substrate" : "No process structure yet"}</h2><p>{sample.latestWorkflowName ? `${sample.latestWorkflowName}${sample.latestWorkflowVersion ? ` · v${sample.latestWorkflowVersion}` : ""}` : "Start a process run to establish the first substrate snapshot."}</p></div>
+          <div className="card-copy">
+            <h2 className="card-title">Current structure</h2>
+            <p className="card-value">{sample.currentStateStepTitle ? `After ${sample.currentStateStepTitle}` : sample.latestWorkflowName ? "Latest recorded substrate" : "No process structure yet"}</p>
+            <p className="card-meta">{sample.latestWorkflowName ? `${sample.latestWorkflowName}${sample.latestWorkflowVersion ? ` · v${sample.latestWorkflowVersion}` : ""}` : "Start a process run to establish the first substrate snapshot."}</p>
+          </div>
           <SampleStateThumbnail sample={sample} />
         </article>
-        <div className="section-heading"><div><p className="eyebrow">Processing history</p><h2>Runs</h2></div><span>{sample.runs.length}</span></div>
+        <div className="section-heading"><div><h2>Process runs</h2><p>The ordered processing history for this sample.</p></div><span className="section-count">{sample.runs.length}</span></div>
         {sample.runs.length ? <div className="sample-run-list">{sample.runs.map((run) => {
           const progress = runProgress(run);
           const frames = runStructureFrames(run);
           return <details className="card sample-run-card" key={run.id}>
             <summary className="sample-run-summary">
-              <div><span className={`run-status run-status-${run.status}`}>{runStatusLabel(run.status)}</span><p className="sample-run-name"><strong>Run {run.sequenceNo} · {run.templateName}</strong> · v{run.templateVersion}</p><small>Plan revision {run.planRevisionNumber} · {run.initialStateHash ? "initial substrate recorded" : "initial substrate unavailable"}</small></div>
+              <div>
+                <div className="sample-run-title-row"><h3 className="sample-run-name">Run {run.sequenceNo} · {run.templateName} <span>v{run.templateVersion}</span></h3><span className={`run-status run-status-${run.status}`}>{runStatusLabel(run.status)}</span></div>
+                <p className="card-meta">Plan revision {run.planRevisionNumber} · {run.initialStateHash ? "initial substrate recorded" : "initial substrate unavailable"}</p>
+              </div>
               <div className="sample-run-progress"><strong>{progress.completed} / {progress.total}</strong><span>steps complete</span></div>
               <time>{new Date(run.completedAt || run.createdAt).toLocaleString()}</time>
               <Link className="button" onClick={(event) => event.stopPropagation()} to={`/processing/${sample.id}?run=${encodeURIComponent(run.id)}`}>{run.status === "active" ? "Continue" : "View run"}</Link>
@@ -228,12 +235,12 @@ export function SamplePage() {
               </div>) : <p className="muted">This run has no recorded structure diagrams.</p>}
             </div>
           </details>;
-        })}</div> : <div className="card empty-run-message"><h2>No process runs</h2><p>Open Processing to choose a process template and start the first run.</p></div>}
+        })}</div> : <div className="card empty-run-message"><h3 className="card-title">No process runs</h3><p>Open Processing to choose a process template and start the first run.</p></div>}
       </section>
     </div>
 
     <section className="sample-record-section" id="sample-record">
-      <div className="section-heading sample-record-heading"><div><p className="eyebrow">Permanent sample history</p><h2>Timeline</h2></div></div>
+      <div className="section-heading sample-record-heading"><div><h2>Sample timeline</h2><p>Permanent sample-level records and audit history.</p></div></div>
       <form className="card composer" onSubmit={addComment}>
         <label>Add a sample record<textarea name="body" rows={3} placeholder="Overall observation about this sample, independent of any process step…" /></label>
         <FileDropzone compact accept="image/*" capture="environment" file={commentImage} onFile={(file) => { pendingUploadRef.current = null; setCommentImage(file); }} label="Drop a sample-level photo" />
