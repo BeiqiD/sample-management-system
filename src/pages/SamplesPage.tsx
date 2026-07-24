@@ -37,7 +37,7 @@ export function SamplesPage() {
     </div>
     <label className="search-box">
       <span>Search</span>
-      <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Code, name, process template, or location" />
+      <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search samples…" />
     </label>
     {error && <p className="error-banner">{error}</p>}
     {loading ? <p className="muted">Loading…</p> : samples.length ? <div className="sample-directory">

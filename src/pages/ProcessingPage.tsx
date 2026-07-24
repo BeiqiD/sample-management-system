@@ -73,7 +73,7 @@ export function ProcessingPage() {
       <div className="segmented-control" aria-label="Filter processing runs">
         {filters.map(({ value, label }) => <button type="button" className={filter === value ? "selected" : ""} aria-pressed={filter === value} key={value} onClick={() => selectFilter(value)}>{label}<span>{counts[value]}</span></button>)}
       </div>
-      <label className="search-box compact-search"><span>Search</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Code, name, process template, or location" /></label>
+      <label className="search-box compact-search"><span>Search</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search processing…" /></label>
     </div>
     {error && <p className="error-banner">{error}</p>}
     {loading ? <p className="muted">Loading…</p> : visibleSamples.length ? <div className="processing-list">
