@@ -50,7 +50,7 @@ export function TemplatesPage() {
   const templateFamilies = groupTemplateVersions(templates);
 
   return <div className="page templates-page">
-    <div className="page-heading"><div><p className="eyebrow">Reusable fabrication plans</p><h1>Process templates</h1></div><button type="button" className={importing ? "button" : "button primary"} onClick={() => setSearchParams(importing ? {} : { import: "1" })}>{importing ? "Close import" : "Import workbook"}</button></div>
+    <div className="page-heading"><div><p className="eyebrow">Reusable fabrication plans</p><h1>Process templates</h1><p className="lead">Create and version reusable fabrication plans while preserving the exact plan assigned to each run.</p></div><button type="button" className={importing ? "button" : "button primary"} onClick={() => setSearchParams(importing ? {} : { import: "1" })}>{importing ? "Close import" : "Import workbook"}</button></div>
     {error && <p className="error-banner">{error}</p>}
     {notice && <p className="success-banner">{notice}</p>}
     {imported && <p className="success-banner">Imported <strong>{imported.name} v{imported.version}</strong>. <Link to={`/templates/${imported.id}`}>Open the new version →</Link></p>}

@@ -9,6 +9,7 @@ import { TemplatePage } from "./pages/TemplatePage";
 import { ProcessingPage } from "./pages/ProcessingPage";
 import { ProcessingWorkspacePage } from "./pages/ProcessingWorkspacePage";
 import { SampleTimelinePage } from "./pages/SampleTimelinePage";
+import { ActionIcon } from "./components/ActionIcon";
 import { NavigationIcon, type NavigationIconName } from "./components/NavigationIcon";
 
 const primaryNavigation: Array<{ to: string; label: string; icon: NavigationIconName }> = [
@@ -51,7 +52,7 @@ export function App() {
             title={`Switch to ${theme === "light" ? "night" : "light"} mode`}
             onClick={() => setTheme((current) => current === "light" ? "dark" : "light")}
           >
-            <span aria-hidden="true">{theme === "light" ? "☾" : "☀"}</span>
+            <ActionIcon name={theme === "light" ? "moon" : "sun"} />
             <small>{theme === "light" ? "Night" : "Light"}</small>
           </button>
         </div>

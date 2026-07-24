@@ -1,6 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { SAMPLE_STATUSES, SAMPLE_STATUS_LABELS, type SampleDetail, type SampleEvent, type SampleRun, type SampleStatus } from "../../shared/types";
+import { ActionIcon } from "../components/ActionIcon";
 import { CommentComposer, CommentSubmissionRecovery } from "../components/CommentComposer";
 import { ConfirmDeleteDialog } from "../components/ConfirmDeleteDialog";
 import { SampleStateThumbnail } from "../components/SampleStateThumbnail";
@@ -159,10 +160,10 @@ export function SamplePage() {
     <Link className="back-link" to="/samples">← Samples</Link>
     <div className="sample-header">
       <div className="sample-header-copy"><p className="eyebrow">{sample.code}</p><h1>{sample.title}</h1><p className="lead">{sample.description || "No description"}</p></div>
-      <div className="header-actions"><StatusPill status={sample.status} /><Link className="button primary" to={`/processing/${sample.id}${activeRun ? `?run=${encodeURIComponent(activeRun.id)}` : "?action=start"}`}>{activeRun ? "Continue processing" : sample.runs.length ? "Start new run" : "Start first run"}</Link><a className="button" href="#sample-notes">Add note</a><button className="button" onClick={() => setSplitting(true)}>Split sample</button><button className="button" disabled={exporting} onClick={() => {
+      <div className="header-actions"><StatusPill status={sample.status} /><Link className="button primary" to={`/processing/${sample.id}${activeRun ? `?run=${encodeURIComponent(activeRun.id)}` : "?action=start"}`}>{activeRun ? "Continue processing" : sample.runs.length ? "Start new run" : "Start first run"}</Link><a className="button responsive-icon-button" href="#sample-notes" aria-label="Add note" title="Add note"><ActionIcon name="note" /><span className="responsive-action-label">Add note</span></a><button className="button" onClick={() => setSplitting(true)}>Split sample</button><button className="button responsive-icon-button" disabled={exporting} aria-label={exporting ? "Exporting sample ZIP" : "Export sample ZIP"} aria-busy={exporting} title={exporting ? "Exporting sample ZIP" : "Export sample ZIP"} onClick={() => {
         setExporting(true);
         void exportSample(sample).catch((error: Error) => setError(error.message)).finally(() => setExporting(false));
-      }}>{exporting ? "Exporting…" : "Export ZIP"}</button></div>
+      }}><ActionIcon name="export" /><span className="responsive-action-label">{exporting ? "Exporting…" : "Export ZIP"}</span></button></div>
     </div>
 
     {error && <p className="error-banner">{error}</p>}
